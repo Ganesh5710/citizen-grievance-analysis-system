@@ -1,6 +1,45 @@
-complaint_text,department
-No water supply in our street,Water
-Street lights are not working,Electricity
-Road is damaged near school,Roads
-Garbage not collected for 3 days,Sanitation
-Bus stop is broken,Transport
+complaint_id,complaint_text,department,location,priority,status
+1,No water supply in our street,Water,Zone A,High,Pending
+2,Water leakage near main road,Water,Zone B,High,In Progress
+3,Low water pressure in colony,Water,Zone C,Medium,Pending
+4,Drinking water not available since morning,Water,Zone A,High,Pending
+5,Water pipeline broken near market,Water,Zone D,High,Resolved
+6,Tap water is muddy and dirty,Water,Zone B,Medium,Pending
+7,No water in apartment tanks,Water,Zone C,High,Pending
+8,Water overflow from public pipeline,Water,Zone A,Medium,Resolved
+
+9,Street lights are not working,Electricity,Zone A,High,Pending
+10,Power cut since morning,Electricity,Zone B,High,In Progress
+11,Electric pole wire issue,Electricity,Zone C,High,Pending
+12,Transformer is damaged in our area,Electricity,Zone D,High,Resolved
+13,Frequent power fluctuations at night,Electricity,Zone A,Medium,Pending
+14,Street light blinking continuously,Electricity,Zone B,Low,Pending
+15,Electricity outage in whole street,Electricity,Zone C,High,In Progress
+16,Short circuit sparks from pole,Electricity,Zone D,High,Pending
+
+17,Road is damaged near school,Roads,Zone A,High,Pending
+18,Potholes on highway road,Roads,Zone B,High,Pending
+19,Road repair needed urgently,Roads,Zone C,High,In Progress
+20,Broken road near hospital,Roads,Zone D,Medium,Pending
+21,Road filled with rainwater,Roads,Zone A,High,Pending
+22,Large pothole near bus stand,Roads,Zone B,Medium,Resolved
+23,Cracks on main road,Roads,Zone C,Low,Pending
+24,Road surface completely damaged,Roads,Zone D,High,Pending
+
+25,Garbage not collected for 3 days,Sanitation,Zone A,High,Pending
+26,Dustbins are overflowing,Sanitation,Zone B,Medium,Pending
+27,Waste collection delayed,Sanitation,Zone C,Medium,Resolved
+28,Drainage water overflow,Sanitation,Zone D,High,Pending
+29,Bad smell from garbage dump,Sanitation,Zone A,Low,Pending
+30,Open drainage causing mosquitoes,Sanitation,Zone B,High,In Progress
+31,Sewage water leaking on road,Sanitation,Zone C,High,Pending
+32,Garbage scattered near park,Sanitation,Zone D,Medium,Pending
+
+33,Bus stop is broken,Transport,Zone A,Medium,Pending
+34,No buses available in evening,Transport,Zone B,High,Pending
+35,Bus timing issue,Transport,Zone C,Low,Resolved
+36,Bus route information missing,Transport,Zone D,Low,Pending
+37,Public bus delayed daily,Transport,Zone A,Medium,In Progress
+38,Broken bench at bus stop,Transport,Zone B,Low,Pending
+39,Bus shelter roof damaged,Transport,Zone C,Medium,Pending
+40,No bus service to our area,Transport,Zone D,High,Pending
