@@ -37,3 +37,15 @@ NLP-based Citizen Grievance Classification System using TF-IDF and Machine Learn
 - Saved trained model, vectorizer, and label encoder for deployment
 
 Week 2 Completed ✅
+
+
+# Week 3: Smart Civic Complaint Intelligence System
+
+## Features
+- AI-powered complaint classification
+- Complaint tracking system
+- Automatic complaint ID generation
+- Priority detection
+- Interactive analytics dashboard
+- Streamlit-based premium UI
+- Real-time department prediction
