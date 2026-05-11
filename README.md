@@ -23,3 +23,17 @@ Top complaint words frequency analysis completed successfully.
 
 ## Project Status
 Week 1 Completed ✅
+## Contributors
+
+
+
+## Week 2: NLP Model Development
+NLP-based Citizen Grievance Classification System using TF-IDF and Machine Learning for automated department routing.
+
+- Implemented text classification using TF-IDF vectorization
+- Trained a Multinomial Naive Bayes model for complaint routing
+- Achieved ~80% accuracy on test data
+- Built prediction system for automatic department classification
+- Saved trained model, vectorizer, and label encoder for deployment
+
+Week 2 Completed ✅
