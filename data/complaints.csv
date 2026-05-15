@@ -43,3 +43,38 @@ complaint_id,complaint_text,department,location,priority,status
 38,Broken bench at bus stop,Transport,Zone B,Low,Pending
 39,Bus shelter roof damaged,Transport,Zone C,Medium,Pending
 40,No bus service to our area,Transport,Zone D,High,Pending
+
+No electricity in our area,Electricity
+Current supply stopped since night,Electricity
+Power issue in our locality,Electricity
+Frequent electricity cuts happening,Electricity
+Street lights are off completely,Electricity
+No power available from morning,Electricity
+
+No water supply for 2 days,Water
+Water not coming in our taps,Water
+Drinking water problem in colony,Water
+Water pipeline damaged,Water
+Low water pressure in our area,Water
+Water leakage issue near road,Water
+
+Garbage not collected properly,Sanitation
+Waste collection delayed in our street,Sanitation
+Drainage overflow near houses,Sanitation
+Bad smell due to garbage,Sanitation
+Dustbins are overflowing badly,Sanitation
+Sewage water leaking,Sanitation
+
+Road completely damaged by rain,Roads
+Large potholes causing accidents,Roads
+Road repair needed urgently,Roads
+Road cracks increasing daily,Roads
+Broken road near market,Roads
+Road filled with mud and water,Roads
+
+No buses available at night,Transport
+Bus service delayed daily,Transport
+Bus stop damaged badly,Transport
+Public transport issue in our area,Transport
+Bus timings are irregular,Transport
+Overcrowded buses every day,Transport
