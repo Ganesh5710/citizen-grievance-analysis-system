@@ -1,130 +1,158 @@
-# AI-Driven Citizen Grievance & Sentiment Analysis System
+# 🏛️ Citizen Grievance Analysis System — v2.0
 
-
-## Live project link
-
+## Live Project Link
 
 https://smart-governance.streamlit.app/
 
 ## Project Overview
-This project focuses on building an NLP-based system that automatically processes citizen complaints, categorizes them into government departments, and performs sentiment-based priority analysis.
 
-## Week 1 Completed
-- Created professional CSV dataset
-- Data loading and preprocessing
-- Complaint text cleaning
-- Exploratory Data Analysis (EDA)
-- Frequent word analysis
-- Visualization using bar charts
-
-## Tech Stack
-- Python
-- CSV
-- Matplotlib
-- Regular Expressions
-- Jupyter Notebook
-
-## Sample Output
-Top complaint words frequency analysis completed successfully.
-
-## Project Status
-Week 1 Completed ✅
-## Contributors
-
-
-
-## Week 2: NLP Model Development
-NLP-based Citizen Grievance Classification System using TF-IDF and Machine Learning for automated department routing.
-
-- Implemented text classification using TF-IDF vectorization
-- Trained a Multinomial Naive Bayes model for complaint routing
-- Achieved ~80% accuracy on test data
-- Built prediction system for automatic department classification
-- Saved trained model, vectorizer, and label encoder for deployment
-
-Week 2 Completed ✅
-
-
-# Week 3: Smart Civic Complaint Intelligence System
-
-## Features
-- AI-powered complaint classification
-- Complaint tracking system
-- Automatic complaint ID generation
-- Priority detection
-- Interactive analytics dashboard
-- Streamlit-based premium UI
-- Real-time department prediction
-
-
-
-### AI-Powered Citizen Grievance Analysis System
-
-## 📌 Week-4 Final Implementation
-
-Civic AI Nexus Ultra is an AI-powered smart governance platform designed to automate citizen grievance management using NLP and real-time analytics.
-
-The system automatically:
-
-* Classifies complaints
-* Routes complaints to departments
-* Detects priority levels
-* Assigns officers
-* Tracks complaint status
-* Provides analytics dashboards
+An **AI-powered, role-based civic complaint portal** built with Python, Streamlit, and SQLite. Citizens submit complaints and track their status, complaints are auto-classified by department and priority, staff view complaints from a persistent database, and only authorized employees can update complaint statuses and add remarks.
 
 ---
 
-## 🚀 Features Implemented
+## 🚀 Quick Start
 
-* AI Complaint Classification
-* Smart Department Routing
-* Priority Detection (High, Medium, Low)
-* Officer Complaint Management
-* Complaint Search System
-* Real-Time Governance Dashboard
-* Status Tracking (Pending, Assigned, In Progress, Resolved)
-* CSV Export Functionality
-* Interactive Charts & Analytics
+```bash
+cd citizen_grievance_project
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Demo Accounts (change default passwords before going live!)
+
+| Role | Username | Password |
+|---|---|---|
+| Super Admin | `superadmin` | `Admin@123` |
+| Admin | `admin` | `Admin@123` |
+| Employee | `employee` | `Admin@123` |
+
+Public citizens can self-register on the login screen (creates a `user` role automatically).
 
 ---
 
-##  Departments Supported
+## 🗂️ Project Structure
 
-* Water
-* Roads
-* Electricity
-* Sanitation
-* Traffic
-* General
+```
+citizen_grievance_project/
+├── app.py                      ← Entry point, auth & routing by role
+├── complaints.db               ← SQLite database (auto-created on startup)
+├── requirements.txt
+├── README.md
+│
+├── core/
+│   ├── permissions.py          ← PERMISSIONS dict, can(), require()
+│   ├── security.py             ← PBKDF2-HMAC-SHA256 hashing & constant-time compare
+│   ├── database.py             ← SQLite connection, schema init, demo seed
+│   ├── auth.py                 ← register, login, create_staff_account, get_all_users
+│   ├── complaints.py           ← submit, get, detail, history, update_complaint
+│   └── classifier.py           ← classify(text) → (department, priority)
+│
+├── ui/
+│   ├── shared.py               ← Shared CSS theme, badges, history & chart helpers
+│   ├── citizen.py              ← Submit Complaint + My Complaints
+│   ├── employee.py             ← Full dashboard + search/filters + edit controls
+│   ├── staff_readonly.py       ← Read-only dashboard (admin)
+│   └── super_admin.py          ← Read-only dashboard + User Management
+│
+├── tests/
+│   └── test_permissions.py     ← Acceptance & persistence test suite
+│
+├── data/
+│   └── complaints.csv          ← Original dataset (Week 1)
+├── model/
+│   ├── preprocessing.py        ← NLP text cleaner (NLTK)
+│   ├── complaint_classifier.pkl
+│   ├── vectorizer.pkl
+│   └── label_encoder.pkl
+└── eda_files/
+    ├── week1_eda.ipynb
+    └── week2_model.ipynb
+```
+
+---
+
+## 🔐 Roles & Permissions
+
+| Action | user | employee | admin | super_admin |
+|---|---|---|---|---|
+| Sign up / Login | ✅ | ✅ | ✅ | ✅ |
+| Submit complaint | ✅ | ❌ | ❌ | ❌ |
+| View own complaints + status | ✅ | — | — | — |
+| View ALL complaints | ❌ | ✅ | ✅ | ✅ |
+| Update status / add remarks | ❌ | ✅ | ❌ | ❌ |
+| Create staff accounts | ❌ | ❌ | ❌ | ✅ |
+
+> **Permissions are enforced at the data/service layer** (`require(user, permission)`) — not only in the UI. Any non-employee calling `update_complaint()` raises `PermissionError`.
+
+---
+
+## 🛡️ Security
+
+- **Salted PBKDF2-HMAC-SHA256** password hashing (260,000 iterations, 32-byte random salt per user)
+- **Constant-time comparison** via `hmac.compare_digest`
+- **Parameterized SQL** everywhere — zero string-formatted queries
+- **Input validation & HTML escaping**: username ≥ 3 chars (`[A-Za-z0-9_]`), password ≥ 8 chars, sanitized text inputs
+- Login failure returns a **generic error** (never reveals whether username or password was wrong)
+- `PRAGMA foreign_keys = ON` enforced on every connection
+- Session-based login; logout clears session state
+
+---
+
+## 🤖 Classification
+
+`core/classifier.py` → `classify(text)` returns `(department, priority)`:
+
+- **Departments**: `Water`, `Roads`, `Electricity`, `Sanitation`, `Traffic`, `General`
+- **Priority**: `High` (danger keywords), `Medium` (issue keywords), `Low` (default)
+
+The classifier is **fully isolated** so the trained TF-IDF + Naive Bayes `.pkl` model can replace it later without modifying any other module.
+
+---
+
+## 🧪 Running Tests
+
+```bash
+python -m unittest discover -s tests -v
+# or with pytest if installed:
+python -m pytest tests/ -v
+```
+
+Tests verify all acceptance criteria:
+1. A user cannot see another user's complaints.
+2. A `user`, `admin`, and `super_admin` calling `update_complaint()` raises `PermissionError`.
+3. An `employee` can update status, and a `complaint_updates` audit row is created.
+4. Public sign-up cannot create a non-`user` role.
+5. Only `super_admin` can call `create_staff_account()`.
+6. A user cannot read the history of someone else's complaint.
+7. Data persists across DB restarts/reloads.
+
+---
+
+## 📅 Development Timeline
+
+| Week | Milestone |
+|---|---|
+| Week 1 | Dataset EDA, text cleaning, word frequency analysis |
+| Week 2 | TF-IDF + Naive Bayes classifier |
+| Week 3 | Streamlit AI Command Center (keyword classification) |
+| Week 4 | Final dashboard & analytics polish |
+| **v2.0** | **Role-based portal, SQLite persistence, audit log, security hardening** |
 
 ---
 
 ## 🖥️ Technology Stack
 
-* Python
-* Streamlit
-* Pandas
-* Plotly
-* NLP-Based Logic
-* GitHub
-* Streamlit Cloud
+- Python
+- Streamlit
+- SQLite (`complaints.db`)
+- Pandas
+- Plotly Express
+- PBKDF2-HMAC-SHA256 (`hashlib` + `hmac`)
 
 ---
 
-## 📊 Dashboard Capabilities
+## 👥 Developed By
 
-* Complaint Monitoring
-* Department Analytics
-* Priority Analytics
-* Officer Tracking
-* Resolution Status Monitoring
-* Search & Filtering
-
-
-## Developed By
-
-Ganesh Bathula
-Freen shaik
-Ansha 
-
+- Ganesh Bathula
+- Freen shaik
+- Ansha
