@@ -13,6 +13,9 @@ env/
 # Database (runtime artifact)
 complaints.db
 
+# Uploaded complaint photos (runtime user uploads)
+uploads/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
