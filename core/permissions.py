@@ -3,13 +3,20 @@ Single source of truth for role-based permissions.
 """
 
 PERMISSIONS: dict[str, set[str]] = {
-    "submit_complaint":       {"user"},
-    "view_own_complaints":    {"user"},
-    "view_all_complaints":    {"employee", "admin", "super_admin"},
-    "update_complaint":       {"employee"},
-    "view_complaint_history": {"user", "employee", "admin", "super_admin"},
-    "create_staff_account":   {"super_admin"},
-    "view_users":             {"super_admin"},
+    "submit_complaint":      {"user"},
+    "view_own":              {"user"},
+    "add_images":            {"user"},
+    "submit_feedback":       {"user"},
+    "view_all":              {"employee", "admin", "super_admin"},
+    "update_status_remark":  {"employee", "admin", "super_admin"},
+    "claim_complaint":       {"employee"},
+    "edit_complaint_fields": {"admin", "super_admin"},
+    "assign_complaint":      {"admin", "super_admin"},
+    "remove_image":          {"admin", "super_admin"},
+    "delete_complaint":      {"super_admin"},
+    "manage_users":          {"super_admin"},
+    "manage_departments":    {"super_admin"},
+    "manage_sla":            {"super_admin"},
 }
 
 VALID_ROLES = {"user", "employee", "admin", "super_admin"}
