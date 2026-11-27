@@ -1,7 +1,6 @@
 """
-Keyword-based complaint classifier.
-Isolated so an ML model (TF-IDF + Naive Bayes) can replace classify() later
-without modifying any other module.
+Keyword-based complaint priority classifier (and optional department helper).
+Isolated so an ML model can replace it later without touching any other module.
 """
 
 import re
@@ -38,30 +37,33 @@ def _matches_any(lower_text: str, keywords: list[str]) -> bool:
     return False
 
 
-def classify(text: str) -> tuple[str, str]:
-    """
-    Classify complaint text into (department, priority).
-
-    Department: first matching DEPARTMENT_KEYWORDS entry; defaults to 'General'.
-    Priority: 'High' if any HIGH_KEYWORDS match, 'Medium' if any MEDIUM_KEYWORDS
-    match, otherwise 'Low'.
-    """
+def classify_priority(text: str) -> str:
+    """Auto-detect complaint priority ('High', 'Medium', 'Low') from complaint text."""
     if not isinstance(text, str):
-        return "General", "Low"
+        return "Low"
 
     lower = text.lower()
+    if _matches_any(lower, HIGH_KEYWORDS):
+        return "High"
+    if _matches_any(lower, MEDIUM_KEYWORDS):
+        return "Medium"
+    return "Low"
 
-    department = "General"
+
+def classify(text: str) -> tuple[str, str]:
+    """
+    Return (department, priority).
+    Department detection is preserved for standalone callers/tests; citizen submission
+    uses citizen-selected department_id and calls classify() for priority detection.
+    """
+    if not isinstance(text, str):
+        return "General / Other", "Low"
+
+    lower = text.lower()
+    department = "General / Other"
     for dept, keywords in DEPARTMENT_KEYWORDS.items():
         if _matches_any(lower, keywords):
             department = dept
             break
 
-    if _matches_any(lower, HIGH_KEYWORDS):
-        priority = "High"
-    elif _matches_any(lower, MEDIUM_KEYWORDS):
-        priority = "Medium"
-    else:
-        priority = "Low"
-
-    return department, priority
+    return department, classify_priority(text)
