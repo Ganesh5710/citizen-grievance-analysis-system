@@ -19,33 +19,48 @@ from core.classifier import HIGH_KEYWORDS, MEDIUM_KEYWORDS
 from core.classifier import classify as rule_classify
 from core.config import PROJECT_ROOT, get_env_float, get_env_str
 from core.logging_setup import get_logger
+from core.priority_rules import compute_final_priority
+from nlp.duration import analyze_duration_and_recurrence
 
 logger = get_logger("ml.classifier")
 
 EMERGENCY_KEYWORDS = list(HIGH_KEYWORDS) + [
     "live wire", "gas leak", "short circuit", "collapsed building",
     "electric shock", "flooding", "submerged", "critical condition",
+    # Telugu & Hindi emergency hazard cues
+    "అత్యవసరం", "షాక్", "గ్యాస్ లీక్", "ముంచేసి", "ప్రమాదం",
+    "आग", "चिंगारी", "हादसा", "बाढ़", "गैस लीक", "करंट लग",
 ]
 
 
-def has_emergency_keyword(text: str) -> bool:
+def find_emergency_keyword(text: str) -> str | None:
     if not text:
-        return False
+        return None
     lower = text.lower()
     for kw in EMERGENCY_KEYWORDS:
-        if " " in kw:
+        if not kw.isascii():
+            if " " in kw:
+                if kw in lower:
+                    return kw
+            elif re.search(rf"(?:^|(?<=[\s,.;:!?])){re.escape(kw)}(?:$|(?=[\s,.;:!?]))", lower):
+                return kw
+        elif " " in kw:
             if kw in lower:
-                return True
+                return kw
         elif re.search(r"\b" + re.escape(kw) + r"\b", lower):
-            return True
-    return False
+            return kw
+    return None
+
+
+def has_emergency_keyword(text: str) -> bool:
+    return find_emergency_keyword(text) is not None
 
 
 class BaseComplaintClassifier(ABC):
     """Minimal swappable interface for complaint text classifiers."""
 
     @abstractmethod
-    def predict(self, text: str) -> dict[str, Any]:
+    def predict(self, text: str, department_hint: str | None = None) -> dict[str, Any]:
         """Return department, priority, confidence, probabilities, top_terms, and model_version."""
 
     @abstractmethod
@@ -153,22 +168,44 @@ class HybridMLClassifier(BaseComplaintClassifier):
             logger.debug("Top term extraction fallback: %s", exc)
             return []
 
-    def predict(self, text: str) -> dict[str, Any]:
+    def predict(self, text: str, department_hint: str | None = None) -> dict[str, Any]:
         self._load_active_bundle()
         threshold = get_env_float("ML_CONFIDENCE_THRESHOLD", 0.60)
-        emergency = has_emergency_keyword(text)
+        emg_kw = find_emergency_keyword(text)
+        emergency = emg_kw is not None
+        dur_info = analyze_duration_and_recurrence(text)
+        rule_dept, rule_prio = rule_classify(text)
 
         if self._bundle is None or not text or not text.strip():
-            dept, prio = rule_classify(text)
-            if emergency:
-                prio = "High"
+            eff_dept = department_hint or rule_dept
+            combined = compute_final_priority(
+                department=eff_dept,
+                emergency_override=emergency,
+                emergency_keyword=emg_kw,
+                duration_hours=dur_info["hours"],
+                duration_matched_text=dur_info["matched_text"],
+                duration_confidence=dur_info["confidence"],
+                ml_priority=rule_prio,
+                keyword_priority=rule_prio,
+                is_recurring=bool(dur_info["recurring"]),
+            )
             return {
-                "department": dept,
+                "department": rule_dept,
                 "department_confidence": 0.45 if text and text.strip() else 0.0,
-                "department_probs": {dept: 0.45},
-                "priority": prio,
+                "department_probs": {rule_dept: 0.45},
+                "priority": combined["final_priority"],
+                "ml_priority": rule_prio,
+                "duration_priority": combined["duration_priority"],
                 "priority_confidence": 0.99 if emergency else 0.55,
                 "emergency_override": emergency,
+                "emergency_keyword": emg_kw,
+                "duration_hours": dur_info["hours"],
+                "duration_matched_text": dur_info["matched_text"],
+                "duration_confidence": dur_info["confidence"],
+                "is_recurring": bool(dur_info["recurring"]),
+                "recurring_phrase": dur_info["recurring_phrase"],
+                "low_duration_confidence": combined["low_duration_confidence"],
+                "priority_reason": combined["reason"],
                 "confidence": 0.45 if text and text.strip() else 0.0,
                 "low_confidence": True,
                 "top_terms": [],
@@ -191,11 +228,23 @@ class HybridMLClassifier(BaseComplaintClassifier):
         prio_probs_arr = prio_pipe.predict_proba([text])[0]
         prio_classes = list(prio_pipe.classes_)
         prio_idx = int(np.argmax(prio_probs_arr))
-        prio_label = str(prio_classes[prio_idx])
+        ml_prio_label = str(prio_classes[prio_idx])
         prio_conf = float(prio_probs_arr[prio_idx])
 
+        eff_dept = department_hint or dept_label
+        combined = compute_final_priority(
+            department=eff_dept,
+            emergency_override=emergency,
+            emergency_keyword=emg_kw,
+            duration_hours=dur_info["hours"],
+            duration_matched_text=dur_info["matched_text"],
+            duration_confidence=dur_info["confidence"],
+            ml_priority=ml_prio_label,
+            keyword_priority=rule_prio,
+            is_recurring=bool(dur_info["recurring"]),
+        )
+        final_prio = combined["final_priority"]
         if emergency:
-            prio_label = "High"
             prio_conf = max(prio_conf, 0.99)
 
         top_terms = self._extract_top_terms(
@@ -209,9 +258,19 @@ class HybridMLClassifier(BaseComplaintClassifier):
             "department": dept_label,
             "department_confidence": round(dept_conf, 4),
             "department_probs": dept_probs,
-            "priority": prio_label,
+            "priority": final_prio,
+            "ml_priority": ml_prio_label,
+            "duration_priority": combined["duration_priority"],
             "priority_confidence": round(prio_conf, 4),
             "emergency_override": emergency,
+            "emergency_keyword": emg_kw,
+            "duration_hours": dur_info["hours"],
+            "duration_matched_text": dur_info["matched_text"],
+            "duration_confidence": dur_info["confidence"],
+            "is_recurring": bool(dur_info["recurring"]),
+            "recurring_phrase": dur_info["recurring_phrase"],
+            "low_duration_confidence": combined["low_duration_confidence"],
+            "priority_reason": combined["reason"],
             "confidence": round(dept_conf, 4),
             "low_confidence": dept_conf < threshold,
             "top_terms": top_terms,
@@ -272,8 +331,8 @@ def reload_classifier() -> None:
         get_classifier()
 
 
-def predict_complaint(text: str) -> dict[str, Any]:
-    return get_classifier().predict(text)
+def predict_complaint(text: str, department_hint: str | None = None) -> dict[str, Any]:
+    return get_classifier().predict(text, department_hint=department_hint)
 
 
 def explain_with_lime(text: str, num_features: int = 8) -> list[dict[str, Any]]:

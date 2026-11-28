@@ -88,8 +88,54 @@ citizen_grievance_project/
 | `manage_users` | No | No | No | Yes | Create any role, deactivate/reactivate, change role, reset password |
 | `manage_departments` | No | No | No | Yes | Add, rename, deactivate, reactivate (never hard-deleted) |
 | `manage_sla` | No | No | No | Yes | Configure target resolution hours per department & priority |
+| `manage_priority_rules` | No | No | No | Yes | Edit `config/priority_rules.yaml` thresholds & aging (audit-logged) |
+| `manage_ml` | No | No | No | Yes | Train candidate models (never auto-activated) and manually promote |
+| `view_review_queue` | No | No | Yes | Yes | Inspect ML low-confidence, mismatch, and low-duration-confidence items |
+| `resolve_review_item` | No | No | Yes | Yes | Accept ML/citizen department and record priority feedback |
+| `view_analytics` | No | Yes (own dept) | Yes | Yes | View complaint analytics and performance breakdowns |
+| `support_complaint` | Yes | No | No | No | Citizens can support open local issues |
+| `view_public_dashboard` | Public | Public | Public | Public | Anonymized public status/metrics |
 
 > All permissions and scopes are enforced in the service layer (`core/`), not only in the UI.
+
+---
+
+## Duration-Aware Priority Engine (`config/priority_rules.yaml`, `nlp/duration.py`)
+
+### 1. Default Duration Thresholds & Essential Service Overrides
+
+Configured in `config/priority_rules.yaml` and editable live by Super Admin in the **Priority Rules** tab (every change writes to `priority_rule_audit`):
+
+| Scope | Low | Medium | High |
+|---|---|---|---|
+| **Default** | `< 24 hours` | `24 hours up to < 7 days (168h)` | `>= 7 days (168h)` |
+| **Water & Electricity Overrides** | `< 24 hours` | `>= 24 hours (1 day / since yesterday)` | `>= 5 days (120h)` |
+
+- **Duration Extraction (`nlp/duration.py`):** Deterministic multilingual extractor supporting English, Telugu, Hindi, and mixed transliterated text — including digits (ASCII, Devanagari `०-९`, Telugu `౦-౯`), number words up to `30+`, abbreviations/typos (`dys`, `wks`, `hrs`), ranges (`2 to 3 days`, `3-4 days` using upper bound), relative idioms (`since yesterday` = 24h, `since morning` = 8h, `since last night` = 12h, `since last week` = 168h, `from last month` = 720h, `for ages` = 168h low-confidence flagged for review), and context filtering to ignore irrelevant durations (`salary`, `ticket valid for`, `call me after`, `festival`, `"fixed X days ago but broke again"`).
+- **Recurring Detection:** Patterns such as `"every week"`, `"twice a month"`, `"हर हफ्ते"`, `"ప్రతి రోజు"` set `is_recurring = True` and bump final priority by **+1 level** instead of converting to a single outage duration.
+- **Open Priority Aging (`core/sla.py:run_priority_aging_check`):** Separate from text rules — unresolved complaints age upward automatically (`Low -> Medium` after **3 days**, `Medium -> High` after **7 days**), writing `actor = "system"` rows to `complaint_updates` and never lowering priority.
+
+### 2. Final Priority Rule (Deterministic + ML Hybrid Precedence)
+
+```text
+final_priority = highest_priority_of([
+  1. Emergency keyword override (fire, explosion, electrocution, flood, injury, death, gas leak, live wire) -> High
+  2. Duration-based priority from config/priority_rules.yaml
+  3. ML model priority (word + char TF-IDF + extracted duration/recurrence features)
+  4. Keyword priority (core/classifier.py)
+])
+then apply:
+  5. Recurring pattern escalation (+1 level if recurring, capped at High)
+```
+
+> **Safety Guarantee:** No ML model prediction can ever lower a priority established by Emergency Keywords (Rule 1) or Duration Thresholds (Rule 2). Staff see the extracted duration, confidence, and `priority_reason` directly on each ticket; low-confidence duration extractions (`< 0.55`) enter `review_queue`, and unparsed time cues log to `duration_extraction_logs`.
+
+### 3. Design Assumptions
+
+- **Water & Electricity 24h Override Harmony:** Because essential-service overrides are meant to escalate *faster* than defaults and unit expectations require `"no water since yesterday"` (`24h`) to evaluate to `Medium` for Water, Water and Electricity keep `medium_min_hours: 24.0` while lowering `high_min_hours` to `120.0` (5 days vs 7-day default).
+- **Month / Year Normalization:** `"1 month"` / `"from last month"` normalizes to `720.0` hours (`30 * 24`), and `"1 year"` normalizes to `8760.0` hours (`365 * 24`).
+- **Offline Zero-Crash Policy:** Text classification uses local TF-IDF + Duration features (`ml/models/`) and falls back cleanly to keyword/duration rules when no trained model artifact is present.
+- **Synthetic Training & Gold Set Isolation:** `data/synthetic_complaints.csv` contains 8,700 100% synthetic rows (`is_synthetic=True`) generated with `template_group` grouping (`StratifiedGroupKFold`); `tests/gold_priority_cases.csv` (339 hand-written cases) is strictly held out for unbiased evaluation (`docs/priority_evaluation.md`).
 
 ---
 

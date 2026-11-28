@@ -30,7 +30,14 @@ from core.departments import (
     set_department_active,
 )
 from core.ml_service import activate_ml_model, list_ml_models, retrain_ml_models
-from core.sla import VALID_PRIORITIES, get_sla_policies, update_sla_policy
+from core.priority_rules import (
+    get_duration_extraction_logs,
+    get_priority_feedback_logs,
+    get_priority_rule_audit_logs,
+    load_priority_rules,
+    save_priority_rules,
+)
+from core.sla import VALID_PRIORITIES, get_sla_policies, run_priority_aging_check, update_sla_policy
 from ui.shared import (
     render_escalations_tab,
     render_html,
@@ -511,6 +518,210 @@ def _render_ml_models_tab(user: dict) -> None:
                 st.error(str(exc))
 
 
+def _render_priority_rules_tab(user: dict) -> None:
+    """Super Admin Priority Rules YAML editor (audit-logged), Aging Check, and Continuous Improvement Logs."""
+    if "sa_pr_flash" in st.session_state:
+        st.success(st.session_state.pop("sa_pr_flash"))
+
+    rules = load_priority_rules()
+    st.markdown("### Duration-Aware Priority Rules (`config/priority_rules.yaml`)")
+    st.caption("Configure default duration thresholds, faster escalation overrides, and open-ticket aging. Every edit is audit-logged.")
+
+    with st.form(key="sa_priority_rules_form"):
+        st.markdown("#### Default Thresholds")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            def_med = st.number_input(
+                "Default Medium >= (hours)",
+                min_value=1.0,
+                max_value=720.0,
+                value=float(rules["default"]["medium_min_hours"]),
+                step=1.0,
+                key="sa_pr_def_med",
+            )
+        with c2:
+            def_high = st.number_input(
+                "Default High >= (hours)",
+                min_value=2.0,
+                max_value=2160.0,
+                value=float(rules["default"]["high_min_hours"]),
+                step=1.0,
+                key="sa_pr_def_high",
+            )
+        with c3:
+            rev_thresh = st.number_input(
+                "Low-Confidence Review Threshold",
+                min_value=0.10,
+                max_value=0.95,
+                value=float(rules.get("review_confidence_threshold", 0.55)),
+                step=0.05,
+                key="sa_pr_rev_thresh",
+            )
+
+        st.markdown("#### Essential Service Department Overrides")
+        overrides = dict(rules.get("department_overrides", {}))
+        active_depts = [d["name"] for d in get_active_departments()]
+        override_depts = sorted(set(list(overrides.keys()) + ["Water", "Electricity"]))
+        edited_overrides: dict[str, dict[str, float]] = {}
+        for dname in override_depts:
+            if dname not in active_depts and dname not in overrides:
+                continue
+            ov = overrides.get(dname, rules["default"])
+            oc1, oc2, oc3 = st.columns([1.2, 1, 1])
+            with oc1:
+                enabled_ov = st.checkbox(
+                    f"Override: {dname}",
+                    value=dname in overrides,
+                    key=f"sa_pr_ov_en_{dname}",
+                )
+            with oc2:
+                ov_med = st.number_input(
+                    f"{dname} Medium >= (hours)",
+                    min_value=1.0,
+                    max_value=720.0,
+                    value=float(ov["medium_min_hours"]),
+                    step=1.0,
+                    key=f"sa_pr_ov_med_{dname}",
+                )
+            with oc3:
+                ov_high = st.number_input(
+                    f"{dname} High >= (hours)",
+                    min_value=2.0,
+                    max_value=2160.0,
+                    value=float(ov["high_min_hours"]),
+                    step=1.0,
+                    key=f"sa_pr_ov_high_{dname}",
+                )
+            if enabled_ov:
+                edited_overrides[dname] = {"medium_min_hours": ov_med, "high_min_hours": ov_high}
+
+        st.markdown("#### Open Complaint Aging Rules")
+        ac1, ac2, ac3 = st.columns(3)
+        with ac1:
+            aging_enabled = st.checkbox(
+                "Enable Automatic Priority Aging",
+                value=bool(rules["aging"].get("enabled", True)),
+                key="sa_pr_aging_en",
+            )
+        with ac2:
+            aging_low_med = st.number_input(
+                "Low -> Medium after (days)",
+                min_value=1.0,
+                max_value=90.0,
+                value=float(rules["aging"]["low_to_medium_days"]),
+                step=1.0,
+                key="sa_pr_aging_lm",
+            )
+        with ac3:
+            aging_med_high = st.number_input(
+                "Medium -> High after (days)",
+                min_value=2.0,
+                max_value=180.0,
+                value=float(rules["aging"]["medium_to_high_days"]),
+                step=1.0,
+                key="sa_pr_aging_mh",
+            )
+
+        audit_note = st.text_input(
+            "Audit Reason / Note",
+            key="sa_pr_note",
+            placeholder="Reason for changing priority thresholds...",
+        )
+        if st.form_submit_button("Save Priority Rules", type="primary"):
+            try:
+                save_priority_rules(
+                    user,
+                    {
+                        "default": {"medium_min_hours": def_med, "high_min_hours": def_high},
+                        "department_overrides": edited_overrides,
+                        "aging": {
+                            "enabled": aging_enabled,
+                            "low_to_medium_days": aging_low_med,
+                            "medium_to_high_days": aging_med_high,
+                        },
+                        "review_confidence_threshold": rev_thresh,
+                    },
+                    note=audit_note,
+                )
+                st.session_state["sa_pr_flash"] = "Priority rules saved and audit-logged."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    if st.button("Run Open Complaint Aging Check Now", key="sa_pr_run_aging_btn"):
+        res = run_priority_aging_check()
+        st.session_state["sa_pr_flash"] = (
+            f"Priority aging complete: {res['low_to_medium']} moved Low->Medium, "
+            f"{res['medium_to_high']} moved Medium->High."
+        )
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("#### Priority Rules Audit Log")
+    audits = get_priority_rule_audit_logs(user, limit=30)
+    if audits:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Time (UTC)": a["created_at"],
+                    "Actor": a["actor_username"],
+                    "Note": a["note"],
+                    "New Config": a["new_config_json"][:140],
+                }
+                for a in audits
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.caption("No priority rule edits recorded yet.")
+
+    st.markdown("#### Continuous Improvement: Failed / Low-Confidence Duration Extractions")
+    dur_logs = get_duration_extraction_logs(user, limit=50)
+    if dur_logs:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Incident ID": d["incident_id"],
+                    "Status": d["status"],
+                    "Found Hours": d["found_hours"],
+                    "Matched Text": d["matched_text"],
+                    "Confidence": d["confidence"],
+                    "Reason": d["reason"],
+                    "Complaint Text": d["text"][:140],
+                    "Created (UTC)": d["created_at"],
+                }
+                for d in dur_logs
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.caption("No failed or low-confidence duration extractions logged yet.")
+
+    st.markdown("#### Admin Priority Corrections (Training Feedback)")
+    fb_logs = get_priority_feedback_logs(user, limit=50)
+    if fb_logs:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Incident ID": f["incident_id"],
+                    "Corrected Priority": f["corrected_priority"],
+                    "Duration (h)": f["duration_hours"],
+                    "Matched Text": f["matched_text"],
+                    "Corrected By": f["corrected_by_username"],
+                    "Text": f["text"][:140],
+                    "Created (UTC)": f["created_at"],
+                }
+                for f in fb_logs
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.caption("No priority corrections logged yet.")
+
+
 def render_super_admin_page(user: dict) -> None:
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     render_html(
@@ -521,7 +732,7 @@ def render_super_admin_page(user: dict) -> None:
         """
     )
 
-    tab_complaints, tab_review, tab_escalations, tab_perf, tab_users, tab_departments, tab_sla, tab_ml = st.tabs([
+    tab_complaints, tab_review, tab_escalations, tab_perf, tab_users, tab_departments, tab_sla, tab_prio_rules, tab_ml = st.tabs([
         "Complaints",
         "Review Queue",
         "Escalations",
@@ -529,6 +740,7 @@ def render_super_admin_page(user: dict) -> None:
         "User Management",
         "Departments",
         "SLA Settings",
+        "Priority Rules",
         "ML Models",
     ])
 
@@ -552,6 +764,9 @@ def render_super_admin_page(user: dict) -> None:
 
     with tab_sla:
         _render_sla_settings(user)
+
+    with tab_prio_rules:
+        _render_priority_rules_tab(user)
 
     with tab_ml:
         _render_ml_models_tab(user)

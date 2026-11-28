@@ -288,3 +288,83 @@ def acknowledge_escalation(actor: dict | None, complaint_id: int, note: str) -> 
                 now_str,
             ),
         )
+
+
+def run_priority_aging_check(now: datetime | None = None) -> dict[str, int]:
+    """
+    Separate from the initial text duration rule: raise priority on open complaints
+    that remain unresolved past configured aging days (default: Low->Medium after 3 days,
+    Medium->High after 7 days). Never lowers priority automatically.
+    Every automatic escalation writes an audit row with actor = 'system'.
+    """
+    from core.priority_rules import load_priority_rules
+
+    cfg = load_priority_rules()
+    aging_cfg = cfg.get("aging", {})
+    if not aging_cfg.get("enabled", True):
+        return {"low_to_medium": 0, "medium_to_high": 0}
+
+    low_to_med_days = float(aging_cfg.get("low_to_medium_days", 3.0))
+    med_to_high_days = float(aging_cfg.get("medium_to_high_days", 7.0))
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+    bumped_med = 0
+    bumped_high = 0
+
+    with closing(_db.get_connection()) as conn, conn:
+        rows = conn.execute(
+            """
+            SELECT id, department_id, priority, status, created_at
+            FROM complaints
+            WHERE is_deleted = 0
+              AND status NOT IN ('Resolved', 'Closed')
+              AND priority IN ('Low', 'Medium')
+            """
+        ).fetchall()
+
+        for r in rows:
+            created_dt = parse_utc(r["created_at"])
+            if created_dt is None:
+                continue
+            age_days = (now_dt - created_dt).total_seconds() / 86400.0
+            old_prio = r["priority"]
+            new_prio = old_prio
+
+            if old_prio == "Low" and age_days >= med_to_high_days:
+                # If a Low complaint waited >= 7d without step, step Low->Medium first (or High? Wait: prompt says Low->Medium after 3d, Medium->High after 7d)
+                new_prio = "High" if age_days >= (low_to_med_days + med_to_high_days) else "Medium"
+            elif old_prio == "Low" and age_days >= low_to_med_days:
+                new_prio = "Medium"
+            elif old_prio == "Medium" and age_days >= med_to_high_days:
+                new_prio = "High"
+
+            if new_prio != old_prio:
+                new_due = compute_due_at(conn, r["department_id"], new_prio, created_dt)
+                conn.execute(
+                    "UPDATE complaints SET priority = ?, due_at = ?, updated_at = ? WHERE id = ?",
+                    (new_prio, new_due, now_str, r["id"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO complaint_updates
+                        (complaint_id, employee_id, actor_label, field_name,
+                         old_status, new_status, old_value, new_value, source, remark, created_at)
+                    VALUES (?, NULL, 'system', 'priority', ?, ?, ?, ?, 'system', ?, ?)
+                    """,
+                    (
+                        r["id"],
+                        r["status"],
+                        r["status"],
+                        old_prio,
+                        new_prio,
+                        f"Auto-aged priority from {old_prio} to {new_prio} after {age_days:.1f} days open",
+                        now_str,
+                    ),
+                )
+                if new_prio == "Medium":
+                    bumped_med += 1
+                else:
+                    bumped_high += 1
+
+    return {"low_to_medium": bumped_med, "medium_to_high": bumped_high}

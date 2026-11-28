@@ -22,6 +22,7 @@ from core.security import sanitize_text
 from core.sla import AUTO_CLOSE_DAYS, compute_due_at, parse_utc
 from core.wards import find_nearest_ward
 from ml.classifier import predict_complaint
+from nlp.duration import looks_like_unparsed_duration
 
 VALID_STATUSES = ("Pending", "Assigned", "In Progress", "Resolved", "Reopened", "Closed")
 VALID_PRIORITIES = ("High", "Medium", "Low")
@@ -103,6 +104,11 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "ml_suggested_department": row["ml_suggested_department"],
         "ml_confidence":        row["ml_confidence"],
         "ml_top_terms":         json.loads(row["ml_top_terms"] or "[]") if isinstance(row["ml_top_terms"], str) else [],
+        "duration_hours":       row["duration_hours"],
+        "duration_matched_text": row["duration_matched_text"] or "",
+        "duration_confidence":  row["duration_confidence"],
+        "is_recurring":         bool(row["is_recurring"] or 0),
+        "priority_reason":      row["priority_reason"] or "",
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
     }
@@ -135,6 +141,11 @@ SELECT c.id,
        c.ml_suggested_department,
        c.ml_confidence,
        c.ml_top_terms,
+       c.duration_hours,
+       c.duration_matched_text,
+       c.duration_confidence,
+       c.is_recurring,
+       c.priority_reason,
        c.is_deleted,
        c.created_at,
        c.updated_at
@@ -183,14 +194,6 @@ def submit_complaint(
     # Validate & strip EXIF/GPS before touching the database
     prepared_images = prepare_images(file_list)
 
-    _, rule_priority = classify(clean_text)
-    ml_pred = predict_complaint(clean_text)
-    priority = "High" if (rule_priority == "High" or ml_pred.get("emergency_override")) else ml_pred["priority"]
-    ml_suggested_dept = ml_pred.get("department")
-    ml_confidence = float(ml_pred.get("confidence", 0.0))
-    ml_top_terms_json = json.dumps(ml_pred.get("top_terms", []))
-    conf_threshold = get_env_float("ML_CONFIDENCE_THRESHOLD", 0.60)
-
     incident_id = "CIV-" + uuid.uuid4().hex[:8].upper()
     now_dt = _utc_now()
     now_str = _fmt_dt(now_dt)
@@ -209,6 +212,21 @@ def submit_complaint(
         if dept is None or not dept["is_active"]:
             raise ValueError("Selected department does not exist or is inactive.")
 
+        _, rule_priority = classify(clean_text)
+        ml_pred = predict_complaint(clean_text, department_hint=dept["name"])
+        priority = "High" if (rule_priority == "High" or ml_pred.get("emergency_override")) else ml_pred["priority"]
+        ml_suggested_dept = ml_pred.get("department")
+        ml_confidence = float(ml_pred.get("confidence", 0.0))
+        ml_top_terms_json = json.dumps(ml_pred.get("top_terms", []))
+        conf_threshold = get_env_float("ML_CONFIDENCE_THRESHOLD", 0.60)
+
+        duration_hours = ml_pred.get("duration_hours")
+        duration_matched = str(ml_pred.get("duration_matched_text") or "")
+        duration_conf = ml_pred.get("duration_confidence")
+        is_recurring = 1 if ml_pred.get("is_recurring") else 0
+        priority_reason = str(ml_pred.get("priority_reason") or "")
+        low_dur_conf = bool(ml_pred.get("low_duration_confidence"))
+
         if resolved_ward_id is not None:
             w_row = conn.execute("SELECT id FROM wards WHERE id = ?", (resolved_ward_id,)).fetchone()
             if w_row is None:
@@ -224,8 +242,10 @@ def submit_complaint(
             INSERT INTO complaints
                 (incident_id, user_id, text, location, department_id, ward_id, latitude, longitude,
                  priority, status, assigned_to, assigned_at, due_at, escalation_level, reopen_count,
-                 is_deleted, ml_suggested_department, ml_confidence, ml_top_terms, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+                 is_deleted, ml_suggested_department, ml_confidence, ml_top_terms,
+                 duration_hours, duration_matched_text, duration_confidence, is_recurring, priority_reason,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 incident_id,
@@ -243,18 +263,25 @@ def submit_complaint(
                 ml_suggested_dept,
                 ml_confidence,
                 ml_top_terms_json,
+                duration_hours,
+                duration_matched,
+                duration_conf,
+                is_recurring,
+                priority_reason,
                 now_str,
                 now_str,
             ),
         )
         complaint_id = cursor.lastrowid
 
-        # Flag low ML confidence or citizen-vs-ML department disagreement for Admin/Super Admin review
+        # Flag low ML confidence, citizen-vs-ML department disagreement, or low duration confidence
         review_reasons: list[str] = []
         if ml_confidence < conf_threshold:
             review_reasons.append("Low ML confidence")
         if ml_suggested_dept and ml_suggested_dept.strip().lower() != dept["name"].strip().lower():
             review_reasons.append("Citizen-ML department mismatch")
+        if low_dur_conf:
+            review_reasons.append("Low duration confidence")
         if review_reasons:
             conn.execute(
                 """
@@ -271,6 +298,27 @@ def submit_complaint(
                     dept["name"],
                     now_str,
                 ),
+            )
+
+        if low_dur_conf:
+            conn.execute(
+                """
+                INSERT INTO duration_extraction_logs
+                    (complaint_id, incident_id, text, found_hours, matched_text,
+                     confidence, status, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'Low Confidence', 'Flagged vague or ambiguous duration phrasing', ?)
+                """,
+                (complaint_id, incident_id, clean_text, duration_hours, duration_matched, duration_conf, now_str),
+            )
+        elif looks_like_unparsed_duration(clean_text):
+            conn.execute(
+                """
+                INSERT INTO duration_extraction_logs
+                    (complaint_id, incident_id, text, found_hours, matched_text,
+                     confidence, status, reason, created_at)
+                VALUES (?, ?, ?, NULL, '', NULL, 'Failed', 'Time cue detected without valid duration extraction', ?)
+                """,
+                (complaint_id, incident_id, clean_text, now_str),
             )
 
         conn.execute(
@@ -646,7 +694,8 @@ def update_complaint(
     with closing(_db.get_connection()) as conn, conn:
         row = conn.execute(
             """
-            SELECT c.status, c.department_id, c.priority, c.assigned_to,
+            SELECT c.incident_id, c.text, c.duration_hours, c.duration_matched_text,
+                   c.status, c.department_id, c.priority, c.assigned_to,
                    c.due_at, c.resolved_at, c.created_at, c.reopen_count, c.is_deleted,
                    d.name AS dept_name,
                    emp.username AS old_emp_username
@@ -721,6 +770,24 @@ def update_complaint(
 
         if target_priority != old_priority:
             audit_rows.append(("priority", old_priority, target_priority, clean_remark))
+            conn.execute(
+                """
+                INSERT INTO priority_feedback_log
+                    (complaint_id, incident_id, text, duration_hours, matched_text,
+                     corrected_priority, corrected_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    complaint_id,
+                    row["incident_id"],
+                    row["text"],
+                    row["duration_hours"],
+                    row["duration_matched_text"] or "",
+                    target_priority,
+                    user["id"],
+                    now_str,
+                ),
+            )
 
         if not audit_rows:
             audit_rows.append(("status", old_status, target_status, clean_remark))

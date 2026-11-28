@@ -115,6 +115,7 @@ def resolve_review_item(
     action: str,
     target_department_id: int | None = None,
     note: str = "",
+    corrected_priority: str | None = None,
 ) -> None:
     """
     Resolve a review queue item as Admin / Super Admin.
@@ -208,6 +209,48 @@ def resolve_review_item(
                 "review_queue",
                 remark=note.strip() or f"Review queue resolved: {action}",
                 created_at=now,
+            )
+
+        if corrected_priority is not None:
+            if corrected_priority not in ("High", "Medium", "Low"):
+                raise ValueError("Invalid corrected priority.")
+            if corrected_priority != comp["priority"]:
+                from core.sla import compute_due_at
+
+                new_due = compute_due_at(conn, new_dept_id, corrected_priority, comp["created_at"])
+                conn.execute(
+                    "UPDATE complaints SET priority = ?, due_at = ?, updated_at = ? WHERE id = ?",
+                    (corrected_priority, new_due, now, comp["id"]),
+                )
+                _insert_audit_in_conn(
+                    conn,
+                    comp["id"],
+                    actor["id"],
+                    actor_label,
+                    "priority",
+                    comp["priority"],
+                    corrected_priority,
+                    "review_queue",
+                    remark=note.strip() or f"Priority corrected in review queue to {corrected_priority}",
+                    created_at=now,
+                )
+            conn.execute(
+                """
+                INSERT INTO priority_feedback_log
+                    (complaint_id, incident_id, text, duration_hours, matched_text,
+                     corrected_priority, corrected_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    comp["id"],
+                    comp["incident_id"],
+                    comp["text"],
+                    comp["duration_hours"],
+                    comp["duration_matched_text"] or "",
+                    corrected_priority,
+                    actor["id"],
+                    now,
+                ),
             )
 
         conn.execute(

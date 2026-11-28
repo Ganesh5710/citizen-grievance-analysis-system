@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from core.config import PROJECT_ROOT, get_env_str
 from core.logging_setup import get_logger
+from ml.features import DurationNumericFeatures
 
 logger = get_logger("ml.trainer")
 
@@ -64,11 +65,14 @@ def build_vectorizer(mode: str = "both") -> FeatureUnion | TfidfVectorizer:
         sublinear_tf=True,
         min_df=3,
     )
+    dur_vec = DurationNumericFeatures()
     if mode == "word":
         return word_vec
     if mode == "char":
         return char_vec
-    return FeatureUnion([("word", word_vec), ("char", char_vec)])
+    if mode == "tfidf_only":
+        return FeatureUnion([("word", word_vec), ("char", char_vec)])
+    return FeatureUnion([("word", word_vec), ("char", char_vec), ("duration", dur_vec)])
 
 
 def _candidate_estimators() -> dict[str, Any]:
@@ -82,8 +86,8 @@ def _candidate_estimators() -> dict[str, Any]:
             cv=3,
         ),
         "RandomForest": lambda: RandomForestClassifier(
-            n_estimators=60,
-            max_depth=28,
+            n_estimators=50,
+            max_depth=24,
             class_weight="balanced_subsample",
             n_jobs=1,
             random_state=42,
@@ -105,19 +109,35 @@ def _load_reviewed_db_rows(db_path: Path | None) -> pd.DataFrame:
         if "complaints" not in tables or "departments" not in tables:
             conn.close()
             return pd.DataFrame()
+        c_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(complaints)").fetchall()
+        }
+        lang_expr = "COALESCE(c.detected_language, 'en')" if "detected_language" in c_cols else "'en'"
         rows = conn.execute(
-            """
+            f"""
             SELECT c.id, c.text, d.name AS department, c.priority,
-                   COALESCE(c.detected_language, 'en') AS language
+                   {lang_expr} AS language
             FROM complaints c
             JOIN departments d ON d.id = c.department_id
             WHERE c.is_deleted = 0
-              AND c.status IN ('Resolved', 'Closed')
+              AND (c.status IN ('Resolved', 'Closed')
+                   OR c.id IN (SELECT complaint_id FROM priority_feedback_log))
             """
         ).fetchall()
+        if "priority_feedback_log" in tables:
+            fb_rows = conn.execute(
+                """
+                SELECT f.complaint_id AS id, f.text, d.name AS department,
+                       f.corrected_priority AS priority
+                FROM priority_feedback_log f
+                JOIN complaints c ON c.id = f.complaint_id
+                JOIN departments d ON d.id = c.department_id
+                WHERE c.is_deleted = 0
+                """
+            ).fetchall()
+        else:
+            fb_rows = []
         conn.close()
-        if not rows:
-            return pd.DataFrame()
         records = [
             {
                 "text": r["text"],
@@ -129,6 +149,15 @@ def _load_reviewed_db_rows(db_path: Path | None) -> pd.DataFrame:
             for r in rows
             if r["text"] and len(str(r["text"]).strip()) >= 8
         ]
+        for r in fb_rows:
+            if r["text"] and len(str(r["text"]).strip()) >= 8:
+                records.append({
+                    "text": r["text"],
+                    "department": r["department"],
+                    "priority": r["priority"],
+                    "language": "en",
+                    "template_group": f"feedback_db_{r['id']}",
+                })
         return pd.DataFrame(records)
     except Exception as exc:
         logger.warning("Skipping live DB rows during training: %s", exc)
@@ -271,7 +300,7 @@ def _evaluate_task(
     # Ablation on the winning estimator family
     est_factory = _candidate_estimators()[best_name]
     ablation: list[dict[str, Any]] = []
-    for mode in ("word", "char", "both"):
+    for mode in ("word", "char", "tfidf_only", "both"):
         abl_pipe = Pipeline([
             ("features", build_vectorizer(mode)),
             ("clf", est_factory()),

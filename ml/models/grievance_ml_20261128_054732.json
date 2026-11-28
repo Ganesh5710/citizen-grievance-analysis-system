@@ -1,0 +1,469 @@
+{
+  "version": "20261128_054732",
+  "trained_at": "2026-11-28 05:47:32 UTC",
+  "dataset_rows": 8700,
+  "train_rows": 6960,
+  "test_rows": 1740,
+  "unique_template_groups": 528,
+  "library_versions": {
+    "python": "3.14.3",
+    "scikit_learn": "1.8.0",
+    "pandas": "3.0.2",
+    "numpy": "2.4.4",
+    "joblib": "1.5.3"
+  },
+  "department": {
+    "best_model": "LinearSVC_Calibrated",
+    "best_metrics": {
+      "model": "LinearSVC_Calibrated",
+      "cv_accuracy_mean": 0.9139,
+      "cv_accuracy_std": 0.0186,
+      "cv_macro_f1_mean": 0.9099,
+      "cv_macro_f1_std": 0.0186,
+      "test_accuracy": 0.9224,
+      "test_macro_f1": 0.9175,
+      "test_weighted_f1": 0.9225
+    },
+    "model_comparison": [
+      {
+        "model": "LinearSVC_Calibrated",
+        "cv_accuracy_mean": 0.9139,
+        "cv_accuracy_std": 0.0186,
+        "cv_macro_f1_mean": 0.9099,
+        "cv_macro_f1_std": 0.0186,
+        "test_accuracy": 0.9224,
+        "test_macro_f1": 0.9175,
+        "test_weighted_f1": 0.9225
+      },
+      {
+        "model": "LogisticRegression",
+        "cv_accuracy_mean": 0.9078,
+        "cv_accuracy_std": 0.0183,
+        "cv_macro_f1_mean": 0.9026,
+        "cv_macro_f1_std": 0.0188,
+        "test_accuracy": 0.9236,
+        "test_macro_f1": 0.9193,
+        "test_weighted_f1": 0.9236
+      },
+      {
+        "model": "RandomForest",
+        "cv_accuracy_mean": 0.9,
+        "cv_accuracy_std": 0.0244,
+        "cv_macro_f1_mean": 0.8971,
+        "cv_macro_f1_std": 0.0255,
+        "test_accuracy": 0.9322,
+        "test_macro_f1": 0.929,
+        "test_weighted_f1": 0.932
+      },
+      {
+        "model": "MultinomialNB",
+        "cv_accuracy_mean": 0.8863,
+        "cv_accuracy_std": 0.0314,
+        "cv_macro_f1_mean": 0.8837,
+        "cv_macro_f1_std": 0.031,
+        "test_accuracy": 0.8931,
+        "test_macro_f1": 0.8958,
+        "test_weighted_f1": 0.8935
+      }
+    ],
+    "labels": [
+      "Electricity",
+      "General / Other",
+      "Roads",
+      "Sanitation",
+      "Traffic",
+      "Water"
+    ],
+    "confusion_matrix": [
+      [
+        311,
+        2,
+        4,
+        4,
+        1,
+        6
+      ],
+      [
+        1,
+        175,
+        17,
+        5,
+        2,
+        7
+      ],
+      [
+        2,
+        2,
+        297,
+        4,
+        3,
+        3
+      ],
+      [
+        2,
+        2,
+        7,
+        283,
+        2,
+        2
+      ],
+      [
+        5,
+        20,
+        4,
+        1,
+        209,
+        4
+      ],
+      [
+        1,
+        3,
+        17,
+        1,
+        1,
+        330
+      ]
+    ],
+    "language_slices": {
+      "en": {
+        "support": 983,
+        "accuracy": 0.9207,
+        "macro_f1": 0.9182
+      },
+      "hi": {
+        "support": 350,
+        "accuracy": 0.8857,
+        "macro_f1": 0.8791
+      },
+      "mixed": {
+        "support": 148,
+        "accuracy": 0.9459,
+        "macro_f1": 0.9386
+      },
+      "te": {
+        "support": 259,
+        "accuracy": 0.9653,
+        "macro_f1": 0.9527
+      }
+    },
+    "ablation": [
+      {
+        "feature_set": "word",
+        "test_accuracy": 0.9103,
+        "test_macro_f1": 0.9045
+      },
+      {
+        "feature_set": "char",
+        "test_accuracy": 0.9034,
+        "test_macro_f1": 0.9048
+      },
+      {
+        "feature_set": "tfidf_only",
+        "test_accuracy": 0.9201,
+        "test_macro_f1": 0.9144
+      },
+      {
+        "feature_set": "both",
+        "test_accuracy": 0.9224,
+        "test_macro_f1": 0.9175
+      }
+    ],
+    "top_confusions": [
+      {
+        "true": "Traffic",
+        "predicted": "General / Other",
+        "count": 20
+      },
+      {
+        "true": "General / Other",
+        "predicted": "Roads",
+        "count": 17
+      },
+      {
+        "true": "Water",
+        "predicted": "Roads",
+        "count": 17
+      },
+      {
+        "true": "Sanitation",
+        "predicted": "Roads",
+        "count": 7
+      },
+      {
+        "true": "General / Other",
+        "predicted": "Water",
+        "count": 7
+      },
+      {
+        "true": "Electricity",
+        "predicted": "Water",
+        "count": 6
+      },
+      {
+        "true": "Traffic",
+        "predicted": "Electricity",
+        "count": 5
+      },
+      {
+        "true": "General / Other",
+        "predicted": "Sanitation",
+        "count": 5
+      }
+    ],
+    "sample_errors": [
+      {
+        "language": "en",
+        "true": "Electricity",
+        "predicted": "Roads",
+        "text": "Dustbins broken and garbage scattered outside Miyapur hospital gate"
+      },
+      {
+        "language": "en",
+        "true": "General / Other",
+        "predicted": "Roads",
+        "text": "Abandoned rusted car lying unclaimed for months near Gachibowli main road"
+      },
+      {
+        "language": "en",
+        "true": "Sanitation",
+        "predicted": "Traffic",
+        "text": "Problem reported - Traffic signal stuck on red at Jubilee Hills railway crossing causing long traffic jam"
+      },
+      {
+        "language": "hi",
+        "true": "Traffic",
+        "predicted": "General / Other",
+        "text": "Request: Ameerpet \u092e\u0947\u0902 \u0917\u0932\u0924 \u0926\u093f\u0936\u093e \u092e\u0947\u0902 \u0935\u093e\u0939\u0928 \u091a\u0932\u093e\u0928\u0947 \u0914\u0930 \u0905\u0935\u0948\u0927 \u092a\u093e\u0930\u094d\u0915\u093f\u0902\u0917 \u0938\u0947 \u091f\u094d\u0930\u0948\u092b\u093f\u0915 \u091c\u093e\u092e \u0932\u0917 \u0930\u0939\u093e \u0939\u0948 asap"
+      },
+      {
+        "language": "en",
+        "true": "Water",
+        "predicted": "Roads",
+        "text": "Danger! Water supply completely stopped in Dilsukhnagar ring road junction residential houses"
+      },
+      {
+        "language": "en",
+        "true": "Electricity",
+        "predicted": "Water",
+        "text": "URGENT Water supply completely stopped in Kondapur railway crossing residential houses"
+      },
+      {
+        "language": "en",
+        "true": "Water",
+        "predicted": "Roads",
+        "text": "Water supply completely stopped in Charminar railway crossing residential houses ward office"
+      },
+      {
+        "language": "te",
+        "true": "Electricity",
+        "predicted": "Water",
+        "text": "Emergency: Miyapur \u0c2a\u0c4d\u0c30\u0c27\u0c3e\u0c28 \u0c30\u0c39\u0c26\u0c3e\u0c30\u0c3f \u0c2a\u0c15\u0c4d\u0c15\u0c28 \u0c24\u0c3e\u0c17\u0c41\u0c28\u0c40\u0c1f\u0c3f \u0c2a\u0c48\u0c2a\u0c41 \u0c32\u0c40\u0c15\u0c4d \u0c05\u0c2f\u0c3f \u0c28\u0c40\u0c30\u0c41 \u0c28\u0c3f\u0c32\u0c41\u0c38\u0c4d\u0c24\u0c4b\u0c02\u0c26\u0c3f"
+      }
+    ]
+  },
+  "priority": {
+    "best_model": "LinearSVC_Calibrated",
+    "best_metrics": {
+      "model": "LinearSVC_Calibrated",
+      "cv_accuracy_mean": 0.8438,
+      "cv_accuracy_std": 0.0056,
+      "cv_macro_f1_mean": 0.8404,
+      "cv_macro_f1_std": 0.0055,
+      "test_accuracy": 0.8402,
+      "test_macro_f1": 0.8373,
+      "test_weighted_f1": 0.8425
+    },
+    "model_comparison": [
+      {
+        "model": "LinearSVC_Calibrated",
+        "cv_accuracy_mean": 0.8438,
+        "cv_accuracy_std": 0.0056,
+        "cv_macro_f1_mean": 0.8404,
+        "cv_macro_f1_std": 0.0055,
+        "test_accuracy": 0.8402,
+        "test_macro_f1": 0.8373,
+        "test_weighted_f1": 0.8425
+      },
+      {
+        "model": "LogisticRegression",
+        "cv_accuracy_mean": 0.8339,
+        "cv_accuracy_std": 0.0087,
+        "cv_macro_f1_mean": 0.8308,
+        "cv_macro_f1_std": 0.0085,
+        "test_accuracy": 0.8385,
+        "test_macro_f1": 0.8352,
+        "test_weighted_f1": 0.8401
+      },
+      {
+        "model": "RandomForest",
+        "cv_accuracy_mean": 0.8318,
+        "cv_accuracy_std": 0.011,
+        "cv_macro_f1_mean": 0.8297,
+        "cv_macro_f1_std": 0.0122,
+        "test_accuracy": 0.8178,
+        "test_macro_f1": 0.817,
+        "test_weighted_f1": 0.8203
+      },
+      {
+        "model": "MultinomialNB",
+        "cv_accuracy_mean": 0.7067,
+        "cv_accuracy_std": 0.0163,
+        "cv_macro_f1_mean": 0.6995,
+        "cv_macro_f1_std": 0.014,
+        "test_accuracy": 0.7385,
+        "test_macro_f1": 0.735,
+        "test_weighted_f1": 0.737
+      }
+    ],
+    "labels": [
+      "High",
+      "Low",
+      "Medium"
+    ],
+    "confusion_matrix": [
+      [
+        494,
+        39,
+        54
+      ],
+      [
+        6,
+        364,
+        81
+      ],
+      [
+        8,
+        90,
+        604
+      ]
+    ],
+    "language_slices": {
+      "en": {
+        "support": 983,
+        "accuracy": 0.8342,
+        "macro_f1": 0.8333
+      },
+      "hi": {
+        "support": 350,
+        "accuracy": 0.8514,
+        "macro_f1": 0.8475
+      },
+      "mixed": {
+        "support": 148,
+        "accuracy": 0.7973,
+        "macro_f1": 0.7941
+      },
+      "te": {
+        "support": 259,
+        "accuracy": 0.8726,
+        "macro_f1": 0.8584
+      }
+    },
+    "ablation": [
+      {
+        "feature_set": "word",
+        "test_accuracy": 0.8052,
+        "test_macro_f1": 0.7992
+      },
+      {
+        "feature_set": "char",
+        "test_accuracy": 0.8391,
+        "test_macro_f1": 0.8356
+      },
+      {
+        "feature_set": "tfidf_only",
+        "test_accuracy": 0.846,
+        "test_macro_f1": 0.8431
+      },
+      {
+        "feature_set": "both",
+        "test_accuracy": 0.8402,
+        "test_macro_f1": 0.8373
+      }
+    ],
+    "top_confusions": [
+      {
+        "true": "Medium",
+        "predicted": "Low",
+        "count": 90
+      },
+      {
+        "true": "Low",
+        "predicted": "Medium",
+        "count": 81
+      },
+      {
+        "true": "High",
+        "predicted": "Medium",
+        "count": 54
+      },
+      {
+        "true": "High",
+        "predicted": "Low",
+        "count": 39
+      },
+      {
+        "true": "Medium",
+        "predicted": "High",
+        "count": 8
+      },
+      {
+        "true": "Low",
+        "predicted": "High",
+        "count": 6
+      }
+    ],
+    "sample_errors": [
+      {
+        "language": "mixed",
+        "true": "High",
+        "predicted": "Low",
+        "text": "Tap water muddy ga vastundi in Gachibowli near ring road junction water supply check pls"
+      },
+      {
+        "language": "te",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Abids ring road junction \u0c26\u0c17\u0c4d\u0c17\u0c30 \u0c1a\u0c46\u0c24\u0c4d\u0c24 \u0c21\u0c38\u0c4d\u0c1f\u0c4d\u200c\u0c2c\u0c3f\u0c28\u0c4d\u0c32\u0c41 \u0c28\u0c3f\u0c02\u0c21\u0c3f \u0c26\u0c41\u0c30\u0c4d\u0c35\u0c3e\u0c38\u0c28 \u0c2e\u0c30\u0c3f\u0c2f\u0c41 \u0c26\u0c4b\u0c2e\u0c32\u0c41 \u0c2a\u0c46\u0c30\u0c3f\u0c17\u0c3e\u0c2f\u0c3f"
+      },
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Road left unpatched with gravel after digging near Jubilee Hills railway crossing"
+      },
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Road left unpatched with gravel after digging near Kukatpally railway crossing"
+      },
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Abandoned rusted car lying unclaimed for months near Gachibowli main road"
+      },
+      {
+        "language": "en",
+        "true": "High",
+        "predicted": "Low",
+        "text": "Severe electricity voltage fluctuation damaging appliances in Kondapur homes"
+      },
+      {
+        "language": "hi",
+        "true": "Low",
+        "predicted": "Medium",
+        "text": "Begumpet \u092e\u0947\u0902 \u092c\u093f\u091c\u0932\u0940 \u0915\u093e \u0916\u0902\u092d\u093e \u091d\u0941\u0915 \u0917\u092f\u093e \u0939\u0948 \u0914\u0930 \u092c\u093f\u091c\u0932\u0940 \u0915\u0947 \u0924\u093e\u0930 \u0928\u0940\u091a\u0947 \u0932\u091f\u0915 \u0930\u0939\u0947 \u0939\u0948\u0902"
+      },
+      {
+        "language": "en",
+        "true": "High",
+        "predicted": "Medium",
+        "text": "Pedestrian crossing unsafe due to broken traffic signal at Secunderabad govt school"
+      }
+    ]
+  },
+  "artifact_path": "C:\\Users\\Ganesh Bathula\\OneDrive\\Desktop\\citizen_grievance_project\\ml\\models\\grievance_ml_20261128_054732.joblib",
+  "metadata_path": "C:\\Users\\Ganesh Bathula\\OneDrive\\Desktop\\citizen_grievance_project\\ml\\models\\grievance_ml_20261128_054732.json"
+}

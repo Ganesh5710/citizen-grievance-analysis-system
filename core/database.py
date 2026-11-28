@@ -133,6 +133,11 @@ CREATE TABLE IF NOT EXISTS complaints (
     ml_suggested_department TEXT,
     ml_confidence           REAL,
     ml_top_terms            TEXT DEFAULT '[]',
+    duration_hours          REAL,
+    duration_matched_text   TEXT DEFAULT '',
+    duration_confidence     REAL,
+    is_recurring            INTEGER NOT NULL DEFAULT 0,
+    priority_reason         TEXT DEFAULT '',
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -208,6 +213,41 @@ CREATE TABLE IF NOT EXISTS ml_models (
     created_by         INTEGER REFERENCES users(id),
     created_at         TEXT DEFAULT (datetime('now')),
     activated_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS priority_rule_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id        INTEGER REFERENCES users(id),
+    actor_username  TEXT NOT NULL DEFAULT '',
+    old_config_json TEXT NOT NULL DEFAULT '{}',
+    new_config_json TEXT NOT NULL DEFAULT '{}',
+    note            TEXT DEFAULT '',
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS priority_feedback_log (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    complaint_id       INTEGER NOT NULL REFERENCES complaints(id),
+    incident_id        TEXT NOT NULL DEFAULT '',
+    text               TEXT NOT NULL,
+    duration_hours     REAL,
+    matched_text       TEXT DEFAULT '',
+    corrected_priority TEXT NOT NULL CHECK(corrected_priority IN ('High','Medium','Low')),
+    corrected_by       INTEGER REFERENCES users(id),
+    created_at         TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS duration_extraction_logs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    complaint_id INTEGER REFERENCES complaints(id),
+    incident_id  TEXT DEFAULT '',
+    text         TEXT NOT NULL,
+    found_hours  REAL,
+    matched_text TEXT DEFAULT '',
+    confidence   REAL,
+    status       TEXT NOT NULL DEFAULT 'Failed',
+    reason       TEXT DEFAULT '',
+    created_at   TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -586,6 +626,11 @@ def init_db() -> None:
                 ("ml_suggested_department", "TEXT"),
                 ("ml_confidence", "REAL"),
                 ("ml_top_terms", "TEXT DEFAULT '[]'"),
+                ("duration_hours", "REAL"),
+                ("duration_matched_text", "TEXT DEFAULT ''"),
+                ("duration_confidence", "REAL"),
+                ("is_recurring", "INTEGER NOT NULL DEFAULT 0"),
+                ("priority_reason", "TEXT DEFAULT ''"),
             ):
                 if col_name not in c_cols:
                     conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")

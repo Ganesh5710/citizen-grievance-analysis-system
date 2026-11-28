@@ -21,6 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.priority_rules import map_duration_to_priority, bump_priority
+from nlp.duration import analyze_duration_and_recurrence
+
 HYDERABAD_WARDS = [
     ("Banjara Hills", 17.4156, 78.4347),
     ("Jubilee Hills", 17.4326, 78.4071),
@@ -335,7 +338,329 @@ def _inject_noise(text: str, rng: random.Random) -> str:
     return text
 
 
-def generate_dataset(n_rows: int = 5500, seed: int = 42, out_path: Path | None = None) -> Path:
+DURATION_SNIPPETS: dict[str, list[tuple[str, float, str]]] = {
+    "en": [
+        ("for 45 minutes", 0.75, "short"),
+        ("for 3 hours", 3.0, "short"),
+        ("for the last 10 hours", 10.0, "short"),
+        ("since morning", 8.0, "short"),
+        ("since last night", 12.0, "short"),
+        ("for half a day", 12.0, "short"),
+        ("since yesterday", 24.0, "med"),
+        ("for 2 days", 48.0, "med"),
+        ("for the last 3 days", 72.0, "med"),
+        ("since 3 days", 72.0, "med"),
+        ("past 4 days", 96.0, "med"),
+        ("2 to 3 days", 72.0, "med"),
+        ("3-4 days", 96.0, "med"),
+        ("for two days", 48.0, "med"),
+        ("for five dys", 120.0, "five"),
+        ("from 6 days", 144.0, "six"),
+        ("for 1 week", 168.0, "long"),
+        ("for a week", 168.0, "long"),
+        ("for one week", 168.0, "long"),
+        ("since last week", 168.0, "long"),
+        ("past 2 wks", 336.0, "long"),
+        ("from last month", 720.0, "long"),
+        ("since 2 months", 1440.0, "long"),
+        ("for 10 hrs", 10.0, "short"),
+    ],
+    "te": [
+        ("3 గంటలుగా", 3.0, "short"),
+        ("ఉదయం నుండి", 8.0, "short"),
+        ("రాత్రి నుండి", 12.0, "short"),
+        ("నిన్నటి నుండి", 24.0, "med"),
+        ("2 రోజులుగా", 48.0, "med"),
+        ("3 రోజులుగా", 72.0, "med"),
+        ("మూడు రోజులుగా", 72.0, "med"),
+        ("౩ రోజులుగా", 72.0, "med"),
+        ("5 రోజులు నుండి", 120.0, "five"),
+        ("2 నుండి 3 రోజులు", 72.0, "med"),
+        ("గత వారం నుండి", 168.0, "long"),
+        ("ఒక వారం నుండి", 168.0, "long"),
+        ("రెండు వారాలుగా", 336.0, "long"),
+        ("గత నెల నుండి", 720.0, "long"),
+    ],
+    "hi": [
+        ("4 घंटे से", 4.0, "short"),
+        ("सुबह से", 8.0, "short"),
+        ("रात से", 12.0, "short"),
+        ("कल से", 24.0, "med"),
+        ("पिछले 3 दिनों से", 72.0, "med"),
+        ("तीन दिन से", 72.0, "med"),
+        ("३ दिनों से", 72.0, "med"),
+        ("2 से 3 दिन से", 72.0, "med"),
+        ("पांच दिन से", 120.0, "five"),
+        ("पिछले हफ्ते से", 168.0, "long"),
+        ("एक सप्ताह से", 168.0, "long"),
+        ("2 हफ्ते से", 336.0, "long"),
+        ("पिछले महीने से", 720.0, "long"),
+    ],
+    "mixed": [
+        ("5 hrs nundi", 5.0, "short"),
+        ("subah se", 8.0, "short"),
+        ("ninna nundi", 24.0, "med"),
+        ("3 din se", 72.0, "med"),
+        ("3 rojula nundi", 72.0, "med"),
+        ("moodu rojulu ga", 72.0, "med"),
+        ("teen din se", 72.0, "med"),
+        ("2 to 4 days nundi", 96.0, "med"),
+        ("5 din se", 120.0, "five"),
+        ("1 week nundi", 168.0, "long"),
+        ("two wks se", 336.0, "long"),
+        ("2 months nundi", 1440.0, "long"),
+    ],
+}
+
+RECURRING_SNIPPETS: dict[str, list[str]] = {
+    "en": ["every week", "twice a month", "every day in morning", "three times a week"],
+    "te": ["ప్రతి వారం", "ప్రతి రోజు ఉదయం", "prathi vaaram"],
+    "hi": ["हर हफ्ते", "हर दिन सुबह", "har mahine"],
+    "mixed": ["har hafte", "prathi roju", "twice a month"],
+}
+
+NEGATIVE_SNIPPETS: dict[str, list[str]] = {
+    "en": [
+        "paid 3 days salary earlier",
+        "ticket valid for 7 days at counter",
+        "was fixed 3 days ago but broke again",
+        "please call me after 3 days before festival",
+    ],
+    "te": ["గత వారం పండుగ ముగిసింది కానీ సమస్య ఉంది", "3 రోజుల సెలవు తర్వాత గమనించాను"],
+    "hi": ["3 दिन की छुट्टी के बाद देखा", "बिल की वैधता 7 दिन की है"],
+    "mixed": ["3 days festival holiday tarvata chusamu", "was fixed 4 days ago then again problem"],
+}
+
+AMBIGUOUS_SNIPPETS: dict[str, list[str]] = {
+    "en": [
+        "for ages",
+        "for a long time",
+        "called the office 3 days ago, no response",
+        "no supply 2 days here and 1 week in next street",
+    ],
+    "te": ["చాలా రోజులుగా", "chala rojula nundi"],
+    "hi": ["बहुत दिनों से", "bahut samay se"],
+    "mixed": ["chala rojula nundi", "bahut dino se"],
+}
+
+DUR_TEMPLATES: dict[str, dict[str, list[str]]] = {
+    "Water": {
+        "en": [
+            "No drinking water supply in {ward} near {landmark} {dur}",
+            "Main water pipeline leaking continuously near {ward} {landmark} {dur}",
+            "Muddy contaminated tap water coming at {ward} {landmark} {dur}",
+            "Burst tap pipeline wasting drinking water beside {ward} {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} దగ్గర {dur} త్రాగునీరు సప్లై రావడం లేదు",
+            "{ward} కాలనీలో మంచినీటి పైప్‌లైన్ {dur} లీక్ అవుతోంది",
+        ],
+        "hi": [
+            "{ward} में {landmark} के पास {dur} पीने का पानी सप्लाई नहीं आ रहा है",
+            "{ward} कॉलोनी की पानी की पाइपलाइन {dur} से लीक हो रही है",
+        ],
+        "mixed": [
+            "{ward} {landmark} dagara {dur} drinking water supply ravatledu",
+            "{ward} mein {landmark} ke paas {dur} water pipeline leak ho rahi hai",
+        ],
+    },
+    "Roads": {
+        "en": [
+            "Deep pothole on main road near {ward} {landmark} left unrepaired {dur}",
+            "Broken asphalt road surface near {landmark} in {ward} {dur}",
+            "Road trench left dug up and unsafe beside {ward} {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} వద్ద రోడ్డు గుంతలు {dur} పూడ్చలేదు",
+            "{ward} లో తారు రోడ్డు {dur} దెబ్బతిని ఉంది",
+        ],
+        "hi": [
+            "{ward} {landmark} रोड पर बड़े गड्ढे {dur} से ठीक नहीं हुए",
+            "{ward} मुख्य सड़क {dur} से टूटी पड़ी है",
+        ],
+        "mixed": [
+            "{ward} {landmark} road meeda potholes {dur} unnai",
+            "{ward} mein road damaged hai near {landmark} {dur}",
+        ],
+    },
+    "Electricity": {
+        "en": [
+            "Frequent electricity outage near {ward} {landmark} {dur}",
+            "Electric streetlight dark and non-working beside {ward} {landmark} {dur}",
+            "Power transformer voltage fluctuation in {ward} near {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} వద్ద {dur} కరెంట్ కోతలు విద్యుత్ సమస్య ఉంది",
+            "{ward} వీధిలో స్ట్రీట్ లైట్లు {dur} వెలగడం లేదు",
+        ],
+        "hi": [
+            "{ward} में {landmark} के पास {dur} से बिजली कटौती हो रही है",
+            "{ward} रोड की स्ट्रीट लाइट {dur} से बंद है",
+        ],
+        "mixed": [
+            "{ward} {landmark} dagara {dur} power cut problem undi",
+            "{ward} mein electricity aur street light {dur} band hai",
+        ],
+    },
+    "Sanitation": {
+        "en": [
+            "Garbage waste overflowing dustbins near {ward} {landmark} {dur}",
+            "Blocked sewage drainage overflowing onto street in {ward} {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} దగ్గర {dur} చెత్త సేకరణ జరగడం లేదు",
+            "{ward} కాలనీలో డ్రైనేజీ మురుగు నీరు {dur} పారుతోంది",
+        ],
+        "hi": [
+            "{ward} {landmark} के पास {dur} कचरा गाड़ी नहीं आई है",
+            "{ward} में सीवर ड्रेनेज लाइन {dur} से ओवरफ्लो हो रही है",
+        ],
+        "mixed": [
+            "{ward} {landmark} dagara {dur} garbage collect cheyaledu",
+            "{ward} mein sewage drainage {dur} overflow ho raha hai",
+        ],
+    },
+    "Traffic": {
+        "en": [
+            "Traffic signal stuck at {ward} {landmark} causing junction jam {dur}",
+            "Illegal parking blocking traffic lane near {ward} {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} జంక్షన్ వద్ద {dur} ట్రాఫిక్ సిగ్నల్ పనిచేయడం లేదు",
+        ],
+        "hi": [
+            "{ward} {landmark} चौराहे पर {dur} ट्रैफिक सिग्नल खराब है",
+        ],
+        "mixed": [
+            "{ward} {landmark} junction lo {dur} traffic signal pani cheyatledu",
+        ],
+    },
+    "General / Other": {
+        "en": [
+            "Stray dogs nuisance near public park at {ward} {landmark} {dur}",
+            "Park boundary wall and public toilet damaged in {ward} {landmark} {dur}",
+        ],
+        "te": [
+            "{ward} {landmark} దగ్గర {dur} వీధి కుక్కల బెడద ఉంది",
+        ],
+        "hi": [
+            "{ward} में {landmark} के पास {dur} से आवारा कुत्तों का आतंक है",
+        ],
+        "mixed": [
+            "{ward} {landmark} lo {dur} stray dogs aur public bench issue undi",
+        ],
+    },
+}
+
+
+def _generate_duration_extra_rows(
+    start_idx: int,
+    n_extra: int,
+    rng: random.Random,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> list[dict]:
+    departments = list(DUR_TEMPLATES.keys())
+    lang_choices = ["en", "te", "hi", "mixed"]
+    lang_weights = [0.50, 0.18, 0.18, 0.14]
+    out: list[dict] = []
+
+    for offset in range(n_extra):
+        idx = start_idx + offset
+        dept = rng.choice(departments)
+        lang = rng.choices(lang_choices, weights=lang_weights, k=1)[0]
+        ward_name, base_lat, base_lon = rng.choice(HYDERABAD_WARDS)
+        lat = round(base_lat + rng.uniform(-0.012, 0.012), 6)
+        lon = round(base_lon + rng.uniform(-0.012, 0.012), 6)
+        landmark = rng.choice(LANDMARKS)
+
+        day_offset = rng.randint(0, 364)
+        created_dt = (start_dt + timedelta(days=day_offset)).replace(
+            hour=rng.randint(6, 22), minute=rng.randint(0, 59), second=rng.randint(0, 59)
+        )
+
+        # Mix: 76% clean duration snippets, 9% recurring, 8% negative irrelevant, 7% ambiguous
+        roll = rng.random()
+        if roll < 0.76:
+            dur_phrase, _, bucket_tag = rng.choice(DURATION_SNIPPETS[lang])
+            case_tag = f"clear_{bucket_tag}"
+        elif roll < 0.85:
+            dur_phrase = rng.choice(RECURRING_SNIPPETS[lang])
+            case_tag = "rec"
+        elif roll < 0.93:
+            dur_phrase = rng.choice(NEGATIVE_SNIPPETS[lang])
+            case_tag = "neg"
+        else:
+            dur_phrase = rng.choice(AMBIGUOUS_SNIPPETS[lang])
+            case_tag = "amb"
+
+        tmpl_list = DUR_TEMPLATES[dept][lang]
+        t_idx = rng.randrange(len(tmpl_list))
+        raw_text = tmpl_list[t_idx].format(ward=ward_name, landmark=landmark, dur=dur_phrase)
+
+        # Small portion (~8%) include an emergency hazard word even on short durations
+        emergency = False
+        if rng.random() < 0.08:
+            raw_text = rng.choice(["URGENT fire hazard - ", "Electrocution danger: ", "Flooding emergency: "]) + raw_text
+            emergency = True
+
+        text = _inject_noise(raw_text, rng)
+        info = analyze_duration_and_recurrence(text)
+        dur_prio = map_duration_to_priority(info["hours"], department=dept)
+        if emergency:
+            priority = "High"
+        elif dur_prio is not None:
+            priority = bump_priority(dur_prio, 1) if info["recurring"] else dur_prio
+        elif info["recurring"]:
+            priority = "Medium"
+        else:
+            # Negative or no duration -> Low or Medium based on mild issue cue
+            priority = "Medium" if rng.random() < 0.35 else "Low"
+
+        label_dept = dept
+        if rng.random() < 0.04:
+            label_dept = rng.choice([d for d in departments if d != dept])
+
+        tmpl_group = f"dur_{dept}_{lang}_{t_idx}_{case_tag}"
+        status = rng.choices(["Closed", "Resolved", "In Progress", "Pending"], weights=[0.4, 0.25, 0.2, 0.15], k=1)[0]
+        res_hrs = ""
+        resolved_at = ""
+        rating = ""
+        if status in ("Resolved", "Closed"):
+            base_h = {"High": 7.0, "Medium": 32.0, "Low": 76.0}[priority]
+            hrs = max(0.5, round(rng.lognormvariate(0, 0.5) * base_h, 2))
+            res_hrs = str(hrs)
+            resolved_at = (created_dt + timedelta(hours=hrs)).strftime("%Y-%m-%d %H:%M:%S")
+            if status == "Closed":
+                rating = str(rng.choices([2, 3, 4, 5], weights=[0.1, 0.2, 0.35, 0.35], k=1)[0])
+
+        out.append({
+            "complaint_id":     f"SYN-{idx:05d}",
+            "text":             text,
+            "language":         lang,
+            "department":       label_dept,
+            "priority":         priority,
+            "status":           status,
+            "ward_name":        ward_name,
+            "latitude":         lat,
+            "longitude":        lon,
+            "template_group":   tmpl_group,
+            "created_at":       created_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "resolved_at":      resolved_at,
+            "resolution_hours": res_hrs,
+            "rating":           rating,
+            "reopen_count":     0,
+            "is_synthetic":     "True",
+        })
+    return out
+
+
+def generate_dataset(
+    n_rows: int = 5500,
+    n_duration_extra: int = 3200,
+    seed: int = 42,
+    out_path: Path | None = None,
+) -> Path:
     rng = random.Random(seed)
     target = out_path or (PROJECT_ROOT / "data" / "synthetic_complaints.csv")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -461,6 +786,16 @@ def generate_dataset(n_rows: int = 5500, seed: int = 42, out_path: Path | None =
             "is_synthetic":     "True",
         })
 
+    rows.extend(
+        _generate_duration_extra_rows(
+            start_idx=n_rows + 1,
+            n_extra=n_duration_extra,
+            rng=rng,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+    )
+
     fieldnames = list(rows[0].keys())
     with open(target, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -471,5 +806,5 @@ def generate_dataset(n_rows: int = 5500, seed: int = 42, out_path: Path | None =
 
 
 if __name__ == "__main__":
-    out = generate_dataset(5500, seed=42)
-    print(f"Generated 5,500 synthetic complaints -> {out}")
+    out = generate_dataset(5500, n_duration_extra=3200, seed=42)
+    print(f"Generated 8,700 synthetic complaints (5,500 base + 3,200 duration-aware) -> {out}")

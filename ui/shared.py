@@ -247,8 +247,21 @@ def render_complaint_card(detail: dict) -> None:
         extra_badges += f' <span class="cgs-badge cgs-badge-danger">Overdue ({detail.get("overdue_hours", 0)}h)</span>'
     if esc_level > 0:
         extra_badges += f' <span class="cgs-badge cgs-badge-warning">Escalation Level {esc_level}</span>'
+    if detail.get("is_recurring"):
+        extra_badges += ' <span class="cgs-badge cgs-badge-purple">Recurring</span>'
     if reopen_count > 0:
         extra_badges += f' <span class="cgs-badge cgs-badge-purple">Reopened x{reopen_count}</span>'
+
+    dur_hrs = detail.get("duration_hours")
+    dur_txt = detail.get("duration_matched_text") or ""
+    dur_conf = detail.get("duration_confidence")
+    prio_reason = detail.get("priority_reason") or ""
+    dur_line = ""
+    if dur_hrs is not None:
+        dur_disp = f"{round(float(dur_hrs) / 24.0, 1)} days ({float(dur_hrs):.1f}h)" if float(dur_hrs) >= 24 else f"{float(dur_hrs):.1f}h"
+        conf_str = f", conf {float(dur_conf):.2f}" if dur_conf is not None else ""
+        dur_line = f"<p><b>Extracted Duration:</b> {html.escape(dur_disp)} &mdash; <i>\"{html.escape(dur_txt)}\"</i>{html.escape(conf_str)}</p>"
+    reason_line = f'<p class="cgs-muted" style="font-size:13px;"><b>Priority Reason:</b> {html.escape(prio_reason)}</p>' if prio_reason else ""
 
     text_html = text_esc.replace("\n", "<br/>")
     render_html(
@@ -265,6 +278,8 @@ def render_complaint_card(detail: dict) -> None:
             <p><b>Department:</b> {dept_esc} &nbsp;|&nbsp; <b>Assigned To:</b> {assigned_esc}</p>
             <p><b>Location:</b> {loc_esc}</p>
             <p><b>Due At (UTC):</b> {due_esc} &nbsp;|&nbsp; <b>Photos:</b> {int(detail.get("photo_count", 0))}</p>
+            {dur_line}
+            {reason_line}
             <p class="cgs-muted" style="font-size:13px;"><b>Filed:</b> {created_esc} &nbsp;|&nbsp; <b>Updated:</b> {updated_esc}</p>
             <hr class="cgs-divider"/>
             <p style="margin-bottom:0;">{text_html}</p>
@@ -1018,6 +1033,15 @@ def _render_ml_explainability_panel(detail: dict, key_prefix: str) -> None:
         c2.metric("Confidence", f"{round(float(conf) * 100, 1)}%" if conf is not None else "N/A")
         c3.metric("Emergency Keyword Rule", "Triggered (High)" if emergency else "Not triggered")
 
+        if detail.get("priority_reason"):
+            st.info(f"Priority Engine Decision: {detail['priority_reason']}")
+        if detail.get("duration_hours") is not None:
+            st.caption(
+                f"Extracted Duration: {detail['duration_hours']}h "
+                f"('{detail.get('duration_matched_text', '')}', confidence={detail.get('duration_confidence')}) | "
+                f"Recurring: {'Yes' if detail.get('is_recurring') else 'No'}"
+            )
+
         if sugg and sugg.lower() != str(detail.get("department", "")).lower():
             st.warning(
                 f"Citizen chose '{detail.get('department')}', while ML suggested '{sugg}'."
@@ -1145,6 +1169,12 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
         key=f"{key_prefix}_rq_note_{selected_item['id']}",
         placeholder="Reason for keeping citizen choice or rerouting...",
     )
+    prio_override = st.selectbox(
+        "Optional Priority Correction (saved for continuous ML training)",
+        options=["Keep Current", "High", "Medium", "Low"],
+        key=f"{key_prefix}_rq_prio_{selected_item['id']}",
+    )
+    corr_prio = None if prio_override == "Keep Current" else prio_override
 
     c_b1, c_b2, c_b3 = st.columns([1, 1, 2])
     with c_b1:
@@ -1154,7 +1184,9 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
             width="stretch",
         ):
             try:
-                resolve_review_item(user, selected_item["id"], "Keep Citizen", note=note_val)
+                resolve_review_item(
+                    user, selected_item["id"], "Keep Citizen", note=note_val, corrected_priority=corr_prio
+                )
                 st.session_state[flash_key] = f"Kept citizen department for #{selected_item['incident_id']}."
                 st.rerun()
             except (PermissionError, ValueError) as exc:
@@ -1170,7 +1202,9 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
             width="stretch",
         ):
             try:
-                resolve_review_item(user, selected_item["id"], "Accept ML", note=note_val)
+                resolve_review_item(
+                    user, selected_item["id"], "Accept ML", note=note_val, corrected_priority=corr_prio
+                )
                 st.session_state[flash_key] = f"Accepted ML department '{ml_sugg}' for #{selected_item['incident_id']}."
                 st.rerun()
             except (PermissionError, ValueError) as exc:
@@ -1195,6 +1229,7 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
                         "Custom Department",
                         target_department_id=custom_dept_id,
                         note=note_val,
+                        corrected_priority=corr_prio,
                     )
                     st.session_state[flash_key] = (
                         f"Reassigned #{selected_item['incident_id']} to '{dept_labels[custom_dept_id]}'."

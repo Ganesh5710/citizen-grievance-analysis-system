@@ -1,0 +1,23 @@
+# Priority engine thresholds and aging configuration.
+# Edits here take effect immediately without code changes.
+# Essential services (Water, Electricity) escalate faster to High (5 days vs 7 days)
+# while retaining >= 24h (1 day / "since yesterday") as the Medium threshold.
+
+default:
+  medium_min_hours: 24.0
+  high_min_hours: 168.0
+
+department_overrides:
+  Water:
+    medium_min_hours: 24.0
+    high_min_hours: 120.0
+  Electricity:
+    medium_min_hours: 24.0
+    high_min_hours: 120.0
+
+aging:
+  enabled: true
+  low_to_medium_days: 3.0
+  medium_to_high_days: 7.0
+
+review_confidence_threshold: 0.55

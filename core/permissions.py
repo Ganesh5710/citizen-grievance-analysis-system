@@ -21,6 +21,7 @@ PERMISSIONS: dict[str, set[str]] = {
     "manage_users":          {"super_admin"},
     "manage_departments":    {"super_admin"},
     "manage_sla":            {"super_admin"},
+    "manage_priority_rules": {"super_admin"},
     "manage_ml":             {"super_admin"},
     "view_public_dashboard": {"*"},
 }

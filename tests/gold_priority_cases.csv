@@ -1,0 +1,340 @@
+text,language,expected_duration_hours,expected_priority,expected_department,case_type
+"Water pipe leaking for 45 minutes outside lane three",en,0.75,Low,Water,clear
+"Power outage in block C for 2 hours this afternoon",en,2.0,Low,Electricity,clear
+"Traffic signal stuck on red for 4 hrs near central bridge",en,4.0,Low,Traffic,clear
+"Streetlights off along canal avenue for 10 hours",en,10.0,Low,Electricity,clear
+"Garbage bin spilled onto alley for 6 hrs near post office",en,6.0,Low,Sanitation,clear
+"No drinking water in apartments for half a day",en,12.0,Low,Water,clear
+"Transformer humming loudly for 15 hours near bakery",en,15.0,Low,Electricity,clear
+"Road blockade near railway gate for 3 hrs",en,3.0,Low,Traffic,clear
+"Broken drain cover near library for 8 hours",en,8.0,Low,Sanitation,clear
+"Stray cattle blocking park gate since morning",en,8.0,Low,General / Other,clear
+"No municipal tap supply in colony since last night",en,12.0,Low,Water,clear
+"Voltage dropping in street feeder since morning",en,8.0,Low,Electricity,clear
+"Sewer overflow began at corner since last night",en,12.0,Low,Sanitation,clear
+"Pothole waterlogging started on service road since morning",en,8.0,Low,Roads,clear
+"Traffic jam backing up at toll plaza since last night",en,12.0,Low,Traffic,clear
+"Public park lights turned off since morning",en,8.0,Low,General / Other,clear
+"Water problem for the last 3 days in our lane",en,72.0,Medium,Water,clear
+"No water since yesterday in phase two houses",en,24.0,Medium,Water,clear
+"Drinking tap dry since 3 days near clock tower",en,72.0,Medium,Water,clear
+"Muddy borewell water supply for two days in sector 4",en,48.0,Medium,Water,clear
+"Water meter chamber overflowing from 4 days near bank",en,96.0,Medium,Water,clear
+"Pothole crater left open for 3 dys on ring highway",en,72.0,Medium,Roads,clear
+"Fresh asphalt washed off from 5 days on outer link",en,120.0,Medium,Roads,clear
+"Road caved near culvert since yesterday evening",en,24.0,Medium,Roads,clear
+"Broken divider kerb left unfixed for two days",en,48.0,Medium,Roads,clear
+"Street sweeping skipped for the last 3 days",en,72.0,Medium,Sanitation,clear
+"Community dustbins full since 4 days near dispensary",en,96.0,Medium,Sanitation,clear
+"Drainage manhole overflowing from 6 days behind flats",en,144.0,Medium,Sanitation,clear
+"Traffic signal amber blink since yesterday at east circle",en,24.0,Medium,Traffic,clear
+"Illegal cab parking choking exit lane for 3 days",en,72.0,Medium,Traffic,clear
+"School crossing zebra paint faded for 5 days",en,120.0,Medium,Roads,clear
+"Stray dog pack chasing joggers for 4 days in park",en,96.0,Medium,General / Other,clear
+"Park gate lock smashed since yesterday morning",en,24.0,Medium,General / Other,clear
+"Electricity cuts lasting 4 hours nightly for 3 days",en,72.0,Medium,Electricity,clear
+"Street pole dark outside temple gate since yesterday",en,24.0,Medium,Electricity,clear
+"Overhead feeder tripping for 4 dys near weavers street",en,96.0,Medium,Electricity,clear
+"Water leakage between 2 to 3 days near subway stairs",en,72.0,Medium,Water,clear
+"Open sewer overflowing 3-4 days beside market lane",en,96.0,Medium,Sanitation,clear
+"Signal lights dark for 2 to 4 days at east junction",en,96.0,Medium,Traffic,clear
+"Broken footpath tiles for 5-6 days outside clinic",en,144.0,Medium,Roads,clear
+"Water supply totally stopped for 5 days in east wing",en,120.0,High,Water,clear
+"Electric pole tilted dangerously for 5 days near mall",en,120.0,High,Electricity,clear
+"Zero drinking water for 1 week in hillside colony",en,168.0,High,Water,clear
+"Pipe completely burst and dry for a week near school",en,168.0,High,Water,clear
+"Muddy sewage-mixed tap supply for one week in block B",en,168.0,High,Water,clear
+"Garbage piled beside hostel past 2 weeks without pickup",en,336.0,High,Sanitation,clear
+"Main avenue potholes untouched for 2 wks after rain",en,336.0,High,Roads,clear
+"Traffic signal dead since last week at railway circle",en,168.0,High,Traffic,clear
+"Streetlights completely dead since 2 months on canal stretch",en,1440.0,High,Electricity,clear
+"Open trench left uncovered from last month near bus yard",en,720.0,High,Roads,clear
+"Public toilet locked and unusable for twenty days",en,480.0,High,General / Other,clear
+"Abandoned rusted truck sitting on curb for thirty days",en,720.0,High,General / Other,clear
+"Drainage line choked for ten days behind shopping arcade",en,240.0,High,Sanitation,clear
+"Power supply missing in annex for seven days",en,168.0,High,Electricity,clear
+"Broken footbridge railing hanging for fifteen days",en,360.0,High,Roads,clear
+"Encroachment stalls blocking pavement for twenty-five days",en,600.0,High,General / Other,clear
+"Contaminated bore supply running for eleven days",en,264.0,High,Water,clear
+"Signal pole knocked down by lorry for nine days",en,216.0,High,Traffic,clear
+"Dead transformer oil leaking for 1 year near yard",en,8760.0,High,Electricity,clear
+"Storm drain blocked for 18 days near stadium gate",en,432.0,High,Sanitation,clear
+"Speed breaker unmarked for twelve days beside college",en,288.0,High,Traffic,clear
+"Overhead water tank leaking for thirteen days at depot",en,312.0,High,Water,clear
+"Transformer fuse keeps blowing for fourteen days",en,336.0,High,Electricity,clear
+"No water supply for twenty-one days in old quarters",en,504.0,High,Water,clear
+"Noise from generator disturbing block for eight days",en,192.0,High,General / Other,clear
+"Dustbin container broken for sixteen days near hostel",en,384.0,High,Sanitation,clear
+"Parking on cycle track ignored for nineteen days",en,456.0,High,Traffic,clear
+"Gravel heaps blocking service lane for twenty-two days",en,528.0,High,Roads,clear
+"Park fountain dry and filthy for twenty-eight days",en,672.0,High,General / Other,clear
+"Main feeder tripped for twenty-four days in summer",en,576.0,High,Electricity,clear
+"2 రోజులుగా మా వీధిలో మంచినీరు రావడం లేదు",te,48.0,Medium,Water,clear
+"3 రోజులుగా నీళ్లు రావడం లేదు దయచేసి చూడండి",te,72.0,Medium,Water,clear
+"౩ రోజులుగా తాగునీటి పైపు లీక్ అవుతోంది",te,72.0,Medium,Water,clear
+"మూడు రోజులుగా నల్లా నీరు మురికిగా వస్తోంది",te,72.0,Medium,Water,clear
+"ఐదు రోజులు నుండి కరెంట్ కోతలు ఎక్కువగా ఉన్నాయి",te,120.0,High,Electricity,clear
+"ఒక వారం నుండి చెత్త బండి మా వీధికి రావడం లేదు",te,168.0,High,Sanitation,clear
+"రెండు వారాలుగా రోడ్డుపై పెద్ద గుంతలు పూడ్చలేదు",te,336.0,High,Roads,clear
+"4 గంటలుగా వీధి దీపాలు వెలగడం లేదు",te,4.0,Low,Electricity,clear
+"30 నిమిషాలుగా ట్రాఫిక్ సిగ్నల్ ఆగిపోయింది",te,0.5,Low,Traffic,clear
+"నిన్నటి నుండి పార్క్ గేటు విరిగి తెరిచి ఉంది",te,24.0,Medium,General / Other,clear
+"ఉదయం నుండి మా కాలనీలో కరెంట్ లేదు",te,8.0,Low,Electricity,clear
+"రాత్రి నుండి డ్రైనేజీ నీరు రోడ్డుపైకి వస్తోంది",te,12.0,Low,Sanitation,clear
+"గత వారం నుండి సిగ్నల్ లైట్లు పనిచేయడం లేదు",te,168.0,High,Traffic,clear
+"గత నెల నుండి ఫుట్‌పాత్ ఆక్రమణలు పెరిగాయి",te,720.0,High,General / Other,clear
+"5 రోజులుగా మా ఇళ్లకు మంచినీరు సరఫరా లేదు",te,120.0,High,Water,clear
+"2 నుండి 3 రోజులు రోడ్డు తవ్వకం గుంతలు వదిలేశారు",te,72.0,Medium,Roads,clear
+"నాలుగు రోజులుగా చెత్త కుప్పలు దుర్వాసన వస్తున్నాయి",te,96.0,Medium,Sanitation,clear
+"పది రోజులుగా వీధి కుక్కల బెడద చాలా ఉంది",te,240.0,High,General / Other,clear
+"ఆరు రోజులుగా ట్రాఫిక్ పోలీసులు జంక్షన్‌లో లేరు",te,144.0,Medium,Traffic,clear
+"ఒక గంటగా ట్రాన్స్‌ఫార్మర్ దగ్గర శబ్దం వస్తోంది",te,1.0,Low,Electricity,clear
+"రెండు రోజులుగా నల్లా కనెక్షన్ ప్రెజర్ తక్కువగా ఉంది",te,48.0,Medium,Water,clear
+"ఏడు రోజులుగా రోడ్డుపై తారు లేచిపోయింది",te,168.0,High,Roads,clear
+"ఇరవై రోజులుగా పబ్లిక్ టాయిలెట్ శుభ్రం చేయలేదు",te,480.0,High,General / Other,clear
+"అర గంటగా పైప్‌లైన్ వాల్వ్ లీక్ అవుతోంది",te,0.5,Low,Water,clear
+"10 రోజులుగా ఓపెన్ నాలా చెత్తతో నిండింది",te,240.0,High,Sanitation,clear
+"8 గంటలుగా మెయిన్ రోడ్డుపై నీరు నిలిచి ఉంది",te,8.0,Low,Roads,clear
+"1 సంవత్సరంగా పాత వాహనం మూలన పడి ఉంది",te,8760.0,High,General / Other,clear
+"పన్నెండు రోజులుగా మా వీధిలో స్ట్రీట్ లైట్ పనిచేయడం లేదు",te,288.0,High,Electricity,clear
+"ఆసుపత్రి వద్ద 6 గంటలుగా ట్రాఫిక్ జామ్ ఉంది",te,6.0,Low,Traffic,clear
+"3-4 రోజులు డ్రైనేజీ మ్యాన్‌హోల్ పొంగిపొర్లుతోంది",te,96.0,Medium,Sanitation,clear
+"పిछले 3 दिनों से पानी नहीं आ रहा है कॉलोनी में",hi,72.0,Medium,Water,clear
+"तीन दिन से सड़क पर बड़ा गड्ढा बना हुआ है",hi,72.0,Medium,Roads,clear
+"३ दिनों से स्ट्रीट लाइट बंद पड़ी है",hi,72.0,Medium,Electricity,clear
+"दो घंटे से ट्रांसफार्मर से बिजली आपूर्ति बंद है",hi,2.0,Low,Electricity,clear
+"30 मिनट से चौराहे का ट्रैफिक सिग्नल अटका है",hi,0.5,Low,Traffic,clear
+"सुबह से नल में गंदा पानी आ रहा है",hi,8.0,Low,Water,clear
+"रात से सीवर का गंदा पानी गली में भर गया",hi,12.0,Low,Sanitation,clear
+"कल से पार्क की चारदीवारी टूटी हुई है",hi,24.0,Medium,General / Other,clear
+"पिछले हफ्ते से कचरा उठाने वाली गाड़ी नहीं आई",hi,168.0,High,Sanitation,clear
+"पिछले महीने से मुख्य सड़क की मरम्मत अधूरी है",hi,720.0,High,Roads,clear
+"पांच दिन से पीने के पानी की सप्लाई पूरी तरह बंद है",hi,120.0,High,Water,clear
+"पांच दिनों से बिजली वोल्टेज बहुत कम आ रहा है",hi,120.0,High,Electricity,clear
+"एक सप्ताह से ट्रैफिक सिग्नल की बत्ती खराब है",hi,168.0,High,Traffic,clear
+"दो हफ्तों से आवारा कुत्तों का आतंक बना हुआ है",hi,336.0,High,General / Other,clear
+"2 से 3 दिन से कूड़ेदान बाहर तक भरे हैं",hi,72.0,Medium,Sanitation,clear
+"चार दिन से फुटपाथ पर दुकानें अतिक्रमण कर रही हैं",hi,96.0,Medium,General / Other,clear
+"दस दिनों से गली में खुदाई के बाद रोड़ी बिखरी है",hi,240.0,High,Roads,clear
+"आठ घंटे से कॉलोनी में पानी का टैंकर नहीं पहुंचा",hi,8.0,Low,Water,clear
+"छह दिन से बिना निशान का स्पीड ब्रेकर खतरा बना है",hi,144.0,Medium,Traffic,clear
+"बीस दिनों से नाली जाम पड़ी है मच्छर पनप रहे",hi,480.0,High,Sanitation,clear
+"आधा घंटा से सिग्नल पोल पर लाल लाइट अटकी है",hi,0.5,Low,Traffic,clear
+"एक साल से बंद पड़ा शौचालय खोला नहीं गया",hi,8760.0,High,General / Other,clear
+"बारह दिनों से सबस्टेशन फ्यूज बार-बार उड़ रहा है",hi,288.0,High,Electricity,clear
+"4-5 दिन से मुख्य पाइपलाइन से पानी रिस रहा है",hi,120.0,High,Water,clear
+"सात दिनों से कचरा सड़क किनारे पड़ा सड़ रहा है",hi,168.0,High,Sanitation,clear
+"नौ दिन से पार्क के बेंच टूटे पड़े हैं",hi,216.0,High,General / Other,clear
+"छह घंटे से बस अड्डे के पास लाइट नहीं है",hi,6.0,Low,Electricity,clear
+"पंद्रह दिन से गलत दिशा में पार्किंग जाम लगा रही",hi,360.0,High,Traffic,clear
+"अठारह दिनों से डामर सड़क धंसी हुई है",hi,432.0,High,Roads,clear
+"10 महीनों से अधूरा नाला काम पूरा नहीं हुआ",hi,7200.0,High,Sanitation,clear
+"3 rojula nundi water ravatledu ma colony lo",mixed,72.0,Medium,Water,clear
+"3 din se road pe bada pothole hai near gate",mixed,72.0,Medium,Roads,clear
+"2 hours nundi current poindi in ward office lane",mixed,2.0,Low,Electricity,clear
+"45 mins se traffic signal red pe stuck hai",mixed,0.75,Low,Traffic,clear
+"subah se garbage bin overflow avutundi",mixed,8.0,Low,Sanitation,clear
+"ninna nundi stray dogs nuisance chala undi park lo",mixed,24.0,Medium,General / Other,clear
+"raat se water pipe leaking outside building",mixed,12.0,Low,Water,clear
+"5 din se drinking water supply closed undi",mixed,120.0,High,Water,clear
+"5 rojula nundi power cut chala ekkuva undi",mixed,120.0,High,Electricity,clear
+"1 week nundi sanitation staff clean cheyaledu",mixed,168.0,High,Sanitation,clear
+"two wks se road digging trench open undi",mixed,336.0,High,Roads,clear
+"pichle mahine se streetlight dark hai street pe",mixed,720.0,High,Electricity,clear
+"2 to 3 days nundi drainage water stagnated undi",mixed,72.0,Medium,Sanitation,clear
+"3-4 din se traffic police missing at junction",mixed,96.0,Medium,Traffic,clear
+"moodu rojulu ga tap water muddy ga vastundi",mixed,72.0,Medium,Water,clear
+"teen din se signal kharab hai main circle pe",mixed,72.0,Medium,Traffic,clear
+"okati week nundi park fence broken undi",mixed,168.0,High,General / Other,clear
+"char ghante se current nahi aa raha market mein",mixed,4.0,Low,Electricity,clear
+"aidu rojulu ga broken footpath repair avvaledu",mixed,120.0,Medium,Roads,clear
+"padi din se dustbin clear nahi hua colony mein",mixed,240.0,High,Sanitation,clear
+"aadha ghanta se signal jam ho raha hai gate par",mixed,0.5,Low,Traffic,clear
+"half a day nundi overhead tank supply band hai",mixed,12.0,Low,Water,clear
+"10 hrs se drainage manhole block ho rakha hai",mixed,10.0,Low,Sanitation,clear
+"two months nundi abandoned car road side lo undi",mixed,1440.0,High,General / Other,clear
+"gatha vaaram nundi heavy traffic bottleneck at crossroad",mixed,168.0,High,Traffic,clear
+"ek din se tap pressure bahut low aa raha hai",mixed,24.0,Medium,Water,clear
+"rendu rojulu ga asphalt cracked near metro stop",mixed,48.0,Medium,Roads,clear
+"saat din se open wire pole par latak raha hai",mixed,168.0,High,Electricity,clear
+"15 dys nundi sewage smell unbearable ga undi",mixed,360.0,High,Sanitation,clear
+"20 mins se power flicker avutundi near dispensary",mixed,0.33,Low,Electricity,clear
+"Fire near transformer burning wire for 1 hour",en,1.0,High,Electricity,emergency
+"Gas leak smell near market lane since 30 minutes",en,0.5,High,General / Other,emergency
+"Electrocution hazard from live wire down for 2 hours",en,2.0,High,Electricity,emergency
+"Short circuit explosion at substation 40 minutes back",en,0.67,High,Electricity,emergency
+"Flooding submerged basement road since morning",en,8.0,High,Roads,emergency
+"Emergency water main blast flooding clinic 3 hours",en,3.0,High,Water,emergency
+"కరెంట్ వైరు తెగి షాక్ ప్రమాదం 2 గంటలుగా ఉంది",te,2.0,High,Electricity,emergency
+"వర్షం నీరు రోడ్డును ముంచేసి ప్రమాదం 4 గంటలుగా ఉంది",te,4.0,High,Roads,emergency
+"గ్యాస్ లీక్ వాసన 30 నిమిషాలుగా వస్తోంది అత్యవసరం",te,0.5,High,General / Other,emergency
+"ट्रांसफार्मर में आग और चिंगारी 1 घंटे से निकल रही है",hi,1.0,High,Electricity,emergency
+"मुख्य सड़क धंसने से बड़ा हादसा 2 घंटे से जाम है",hi,2.0,High,Roads,emergency
+"अस्पताल के बाहर सीवर बाढ़ 3 घंटे से भर गई",hi,3.0,High,Sanitation,emergency
+"live wire sparkling urgent danger since 1 hr at gate",mixed,1.0,High,Electricity,emergency
+"fire risk short circuit in junction box 2 hrs nundi",mixed,2.0,High,Electricity,emergency
+"flood submerged road junction 30 mins nundi emergency",mixed,0.5,High,Roads,emergency
+"Water supply cuts out every week in upper block",en,none,Medium,Water,recurring
+"Garbage truck skips our street twice a month",en,none,Medium,Sanitation,recurring
+"Voltage drops every evening and daily around seven",en,none,Medium,Electricity,recurring
+"Traffic jams happen every morning at ferry junction",en,none,Medium,Traffic,recurring
+"Noise loudspeakers repeat weekly near temple grounds",en,none,Medium,General / Other,recurring
+"ప్రతి వారం మా వీధిలో మంచినీరు నిలిచిపోతోంది",te,none,Medium,Water,recurring
+"ప్రతి రోజు ఉదయం ట్రాఫిక్ సిగ్నల్ వద్ద జామ్ అవుతోంది",te,none,Medium,Traffic,recurring
+"ప్రతి నెల రెండుసార్లు డ్రైనేజీ పొంగుతోంది",te,none,Medium,Sanitation,recurring
+"हर हफ्ते बिजली ट्रांसफार्मर ट्रिप हो जाता है",hi,none,Medium,Electricity,recurring
+"हर दिन सुबह कचरा गाड़ी बिना उठाए निकल जाती है",hi,none,Medium,Sanitation,recurring
+"हर महीने चौराहे पर पार्किंग की समस्या लौट आती है",hi,none,Medium,Traffic,recurring
+"har hafte water pressure down avutundi colony lo",mixed,none,Medium,Water,recurring
+"prathi roju evening street lights off ho jati hain",mixed,none,Medium,Electricity,recurring
+"twice a month drainage block avutundi main lane lo",mixed,none,Medium,Sanitation,recurring
+"Water pressure drops every day and no supply for 3 days now",en,72.0,High,Water,recurring
+"Garbage collection fails weekly and pile rotting for 4 days",en,96.0,High,Sanitation,recurring
+"I paid 3 days salary to helper because water was muddy",en,none,Low,Water,negative
+"Bus pass ticket valid for 7 days not accepted near metro",en,none,Low,Traffic,negative
+"Please call me after 3 days regarding streetlight pole",en,none,Low,Electricity,negative
+"3 days festival crowd left plastic wrappers on park lawn",en,none,Low,Sanitation,negative
+"It was fixed 3 days ago but broke again near corner",en,none,Low,Roads,negative
+"Water pipeline was repaired 5 days ago then leaked today",en,none,Low,Water,negative
+"Road trench patched 4 days back then sank again",en,none,Low,Roads,negative
+"Warranty of 1 year expired on public solar street lamp",en,none,Low,Electricity,negative
+"Come after 2 weeks when festival ends to trim branches",en,none,Low,General / Other,negative
+"3 రోజుల జీతం చెల్లించినా నీటి ట్యాంకర్ రాలేదు",te,none,Low,Water,negative
+"7 రోజుల బస్సు పాస్ టికెట్ గడువు ముగిసింది",te,none,Low,Traffic,negative
+"3 రోజుల పండుగ తర్వాత చెత్త కుప్పలు శుభ్రం చేయలేదు",te,none,Low,Sanitation,negative
+"3 రోజుల క్రితం బాగు చేసిన రోడ్డు మళ్లీ పాడైంది",te,none,Low,Roads,negative
+"వచ్చే 2 రోజుల తర్వాత వచ్చి ట్రాన్స్‌ఫార్మర్ చూడండి",te,none,Low,Electricity,negative
+"3 दिन की सैलरी कटने पर भी सफाई नहीं हुई",hi,none,Low,Sanitation,negative
+"7 दिन की वैधता वाला पास केंद्र पर काम नहीं कर रहा",hi,none,Low,Traffic,negative
+"कृपया 3 दिन बाद कॉल करें ट्रांसफार्मर जांच के लिए",hi,none,Low,Electricity,negative
+"3 दिन पहले नल ठीक हुआ था पर आज फिर टूट गया",hi,none,Low,Water,negative
+"दो दिन के त्योहार के बाद पार्क की बेंच टूट गई",hi,none,Low,General / Other,negative
+"paid 4 days wages for private water tanker issue",mixed,none,Low,Water,negative
+"ticket valid for 7 days at parking booth broken machine",mixed,none,Low,Traffic,negative
+"3 days festival tarvata road clean cheyaledu",mixed,none,Low,Sanitation,negative
+"was fixed 3 days ago lekin aaj phir leak start",mixed,none,Low,Water,negative
+"please visit after 2 days to check streetlight wiring",mixed,none,Low,Electricity,negative
+"Drainage gutter blocked for ages near fish market",en,168.0,High,Sanitation,ambiguous
+"Pothole hazard unaddressed for a long time outside depot",en,168.0,High,Roads,ambiguous
+"Called the office 3 days ago, no response on leak",en,72.0,Medium,Water,ambiguous
+"Complained about dark streetlight 4 days ago, no response",en,96.0,Medium,Electricity,ambiguous
+"Road dug up 2 days near gate and 1 week near bridge",en,168.0,High,Roads,ambiguous
+"Water supply low 3 days in east lane and 10 days in annex",en,240.0,High,Water,ambiguous
+"చాలా రోజులుగా ఈ వీధిలో మురుగు నీరు నిలుస్తోంది",te,168.0,High,Sanitation,ambiguous
+"చాలా రోజులుగా రోడ్డు గుంతలు మరమ్మత్తు చేయలేదు",te,168.0,High,Roads,ambiguous
+"3 రోజుల క్రితం ఆఫీసుకు ఫోన్ చేసినా స్పందన లేదు",te,72.0,Medium,Water,ambiguous
+"2 రోజులు ఇక్కడ మరియు 1 వారం అక్కడ కరెంట్ లేదు",te,168.0,High,Electricity,ambiguous
+"बहुत दिनों से कॉलोनी में पानी की किल्लत बनी हुई है",hi,168.0,High,Water,ambiguous
+"बहुत समय से पार्क की सफाई नहीं हुई है",hi,168.0,High,General / Other,ambiguous
+"3 दिन पहले दफ्तर में शिकायत की पर कोई जवाब नहीं आया",hi,72.0,Medium,Water,ambiguous
+"2 दिन गली में और 2 हफ्ते मेन रोड पर कचरा पड़ा है",hi,336.0,High,Sanitation,ambiguous
+"chala rojula nundi sewage overflow avutundi market lo",mixed,168.0,High,Sanitation,ambiguous
+"bahut dino se streetlights off hain service lane par",mixed,168.0,High,Electricity,ambiguous
+"Called office 5 days ago, still no response on pipe break",mixed,120.0,High,Water,ambiguous
+"2 days here aur 10 days highway pe pothole problem hai",mixed,240.0,High,Roads,ambiguous
+"Leaking valve wastes clean drinking water by the school",en,none,Low,Water,negative
+"Deep pothole damages front axle near bus stand",en,none,Medium,Roads,negative
+"Broken streetlight pole makes walkway completely dark",en,none,Low,Electricity,negative
+"Garbage spilling around residential park dustbins",en,none,Medium,Sanitation,negative
+"Broken traffic signal mirror confuses turning drivers",en,none,Medium,Traffic,negative
+"Abandoned scooter gathering rust outside public library",en,none,Low,General / Other,negative
+"మంచినీటి పైప్‌లైన్ వాల్వ్ సరిగా మూయడం లేదు",te,none,Low,Water,negative
+"రోడ్డుపై తారు పోయి కంకర రాళ్లు తేలాయి",te,none,Low,Roads,negative
+"వీధి దీపం వెలగక చీకటిగా మారింది దారి",te,none,Low,Electricity,negative
+"డస్ట్‌బిన్ చుట్టూ చెత్త పేరుకుపోయి వాసన వస్తోంది",te,none,Low,Sanitation,negative
+"ట్రాఫిక్ సిగ్నల్ బోర్డు వంగి కనిపించడం లేదు",te,none,Low,Traffic,negative
+"పబ్లిక్ టాయిలెట్ తలుపు విరిగి మూతపడింది",te,none,Low,General / Other,negative
+"नल से पानी का दबाव कम आ रहा है मोहल्ले में",hi,none,Low,Water,negative
+"सड़क के किनारे गिट्टी और मलबा पड़ा हुआ है",hi,none,Low,Roads,negative
+"बिजली के खंभे की स्ट्रीट लाइट खराब है",hi,none,Low,Electricity,negative
+"नालियों में प्लास्टिक फंसने से पानी रुक रहा है",hi,none,Low,Sanitation,negative
+"चौराहे पर ज़ेबरा क्रॉसिंग की पट्टी मिट गई है",hi,none,Low,Traffic,negative
+"पार्क के झूले और बेंच टूटे हुए पड़े हैं",hi,none,Low,General / Other,negative
+"tap water muddy ga vastundi near post office",mixed,none,Low,Water,negative
+"road cracks valla bikes slip avutunnai bridge deggara",mixed,none,Medium,Roads,negative
+"power voltage problem in residential quarters",mixed,none,Medium,Electricity,negative
+"drainage block hone se bad smell aa rahi hai",mixed,none,Medium,Sanitation,negative
+"illegal auto parking blocking narrow turn",mixed,none,Low,Traffic,negative
+"stray dogs barking late night around apartment gate",mixed,none,Low,General / Other,negative
+"Water pressure weak for six hours along avenue",en,6.0,Low,Water,clear
+"Garbage skipped for three days outside hostel",en,72.0,Medium,Sanitation,clear
+"Power cut lasting 16 hours in east residential block",en,16.0,Low,Electricity,clear
+"Road divider crushed for 11 days near flyover",en,264.0,High,Roads,clear
+"Signal lights stuck for 14 hours at town square",en,14.0,Low,Traffic,clear
+"Stray cattle roaming playground for 23 days",en,552.0,High,General / Other,clear
+"Tap water completely missing for 26 days in ward",en,624.0,High,Water,clear
+"Open drain blocked for 17 days near bakery road",en,408.0,High,Sanitation,clear
+"Streetlights fused for 27 days on bypass road",en,648.0,High,Electricity,clear
+"Speed bump broken for 29 days outside library",en,696.0,High,Roads,clear
+"No water flow in overhead line for twenty days",en,480.0,High,Water,clear
+"Transformer sparking emergency reported 15 minutes back",en,0.25,High,Electricity,emergency
+"ఒక నెల నుండి నీటి ట్యాంకర్ సమయానికి రావడం లేదు",te,720.0,High,Water,clear
+"మూడు గంటలుగా విద్యుత్ సరఫరా నిలిచిపోయింది",te,3.0,Low,Electricity,clear
+"ఆరు రోజులుగా రోడ్డుపై మట్టి గుట్టలు తొలగించలేదు",te,144.0,Medium,Roads,clear
+"సహాయ కేంద్రం వద్ద చెత్త పదిహేను రోజులుగా ఉంది",te,360.0,High,Sanitation,clear
+"రెండు గంటలుగా సిగ్నల్ వద్ద వాహనాలు కదలడం లేదు",te,2.0,Low,Traffic,clear
+"ఐదు రోజులుగా పార్క్ లైట్లు వెలగడం లేదు",te,120.0,Medium,General / Other,clear
+"एक महीना से पार्क की घास काटी नहीं गई",hi,720.0,High,General / Other,clear
+"चार घंटे से मुख्य बाजार की बत्ती गुल है",hi,4.0,Low,Electricity,clear
+"छह दिनों से नाले का कीचड़ सड़क पर फैला है",hi,144.0,Medium,Sanitation,clear
+"ग्यारह दिन से सड़क की मरम्मत रुकी हुई है",hi,264.0,High,Roads,clear
+"दो दिन से पानी का प्रेशर ऊपर की मंजिल तक नहीं जाता",hi,48.0,Medium,Water,clear
+"चौदह दिन से सिग्नल लाइट का टाइमर बंद है",hi,336.0,High,Traffic,clear
+"five days nundi sewage pipe broken near temple",mixed,120.0,Medium,Sanitation,clear
+"four hrs se traffic light dark hai station pe",mixed,4.0,Low,Traffic,clear
+"ek hafta se overhead tank empty hai block mein",mixed,168.0,High,Water,clear
+"rendu weeks nundi garbage clearance ledu colony lo",mixed,336.0,High,Sanitation,clear
+"chaar din se pothole deepening near school wall",mixed,96.0,Medium,Roads,clear
+"padi hrs nundi voltage drop chala undi",mixed,10.0,Low,Electricity,clear
+"twenty-five minutes since traffic light failed at gate",en,0.42,Low,Traffic,clear
+"sewage leaking for 6 hrs behind post office",en,6.0,Low,Sanitation,clear
+"road pothole growing from 3 days outside dispensary",en,72.0,Medium,Roads,clear
+"water tanker absent for 14 days in sector nine",en,336.0,High,Water,clear
+"park bench rusted and sharp for 9 days",en,216.0,High,General / Other,clear
+"live electric cable down 20 mins ago emergency danger",en,0.33,High,Electricity,emergency
+"flooding entering homes for 1 hour urgent help",en,1.0,High,Water,emergency
+"ప్రతి వారం 2 రోజుల పాటు కరెంట్ తీస్తున్నారు",te,48.0,High,Electricity,recurring
+"हर हफ्ते तीन दिन पानी बंद रहता है कॉलोनी में",hi,72.0,High,Water,recurring
+"daily voltage falls and transformer off for 2 days",mixed,48.0,High,Electricity,recurring
+"twenty-nine days since canal wall cracked badly",en,696.0,High,Roads,clear
+"thirty days without park sweeper visiting lawn",en,720.0,High,General / Other,clear
+"fourteen hours no power supply in east block",en,14.0,Low,Electricity,clear
+"eighteen hours broken tap valve pouring water",en,18.0,Low,Water,clear
+"twenty-two hours garbage van missing from route",en,22.0,Low,Sanitation,clear
+"16 hours traffic police missing from school crossing",en,16.0,Low,Traffic,clear
+"twenty-one days manhole lid missing on lane",en,504.0,High,Sanitation,clear
+"seventeen days footpath tiles dug up outside bank",en,408.0,High,Roads,clear
+"eighteen days transformer oil dripping slowly",en,432.0,High,Electricity,clear
+"nineteen days noisy generator next to library",en,456.0,High,General / Other,clear
+"twenty-three days waterlogging after burst valve",en,552.0,High,Water,clear
+"twenty-six days broken traffic mirror at turn",en,624.0,High,Traffic,clear
+"5 hours ago fixed signal but stopped after 1 hour",en,none,Low,Traffic,negative
+"4 days leave taken by watchman at garden gate",en,none,Low,General / Other,negative
+"ticket valid for 2 weeks for municipal parking lot",en,none,Low,Traffic,negative
+"6 days festival lighting causing crowding on road",en,none,Low,General / Other,negative
+"3 days ago repaired transformer started sparking now",en,none,High,Electricity,emergency
+"two to three hrs power interruption near market",en,3.0,Low,Electricity,clear
+"four to six days no drinking water tanker",en,144.0,High,Water,clear
+"1 to 2 wks road pavement remains broken",en,336.0,High,Roads,clear
+"5-6 hrs sewer backing up near bakery street",en,6.0,Low,Sanitation,clear
+"12-18 hours signal bulb burned out at corner",en,18.0,Low,Traffic,clear
+"3-5 days park gate chain rusted shut",en,120.0,Medium,General / Other,clear
+"half an hour water outage near hospital wing",en,0.5,Low,Water,clear
+"half a week open drain stinking near block F",en,84.0,Medium,Sanitation,clear
+"couple days pothole causing skids near bus bay",en,48.0,Medium,Roads,clear
+"few days low voltage damaging street bulbs",en,72.0,Medium,Electricity,clear
+"2 రోజుల నుండి 4 రోజులు చెత్త ట్రక్ రాలేదు",te,96.0,Medium,Sanitation,clear
+"4-5 గంటలుగా ట్రాఫిక్ సిగ్నల్ బల్బ్ వెలగడం లేదు",te,5.0,Low,Traffic,clear
+"6 రోజులుగా పార్క్ ఫెన్స్ విరిగి ఉంది",te,144.0,Medium,General / Other,clear
+"1-2 వారాలుగా తాగునీటి ప్రెజర్ తక్కువగా ఉంది",te,336.0,High,Water,clear
+"2 నుండి 3 గంటలు విద్యుత్ కోత ఉంది",te,3.0,Low,Electricity,clear
+"2 से 4 घंटे से सड़क पर जाम लगा है",hi,4.0,Low,Traffic,clear
+"3-4 दिनों से पार्क में सफाई नहीं हुई",hi,96.0,Medium,General / Other,clear
+"5-6 दिन से कचरा गाड़ी मोहल्ले में नहीं आई",hi,144.0,Medium,Sanitation,clear
+"1 से 2 हफ्ते से मुख्य सड़क गड्ढों से भरी है",hi,336.0,High,Roads,clear
+"4 से 5 दिन से पीने के पानी की लाइन टूटी है",hi,120.0,High,Water,clear
+"2 to 3 hrs nundi signal red light stuck undi",mixed,3.0,Low,Traffic,clear
+"4-6 days se open manhole near bus stand",mixed,144.0,Medium,Sanitation,clear
+"1-2 wks nundi road patchwork pending undi",mixed,336.0,High,Roads,clear
+"5 to 6 hrs se drinking water pump off hai",mixed,6.0,Low,Water,clear
+"3-4 din se park wall damaged hai corner pe",mixed,96.0,Medium,General / Other,clear
