@@ -1,0 +1,459 @@
+{
+  "version": "20261128_050455",
+  "trained_at": "2026-11-28 05:04:55 UTC",
+  "dataset_rows": 5500,
+  "train_rows": 4421,
+  "test_rows": 1079,
+  "unique_template_groups": 192,
+  "library_versions": {
+    "python": "3.14.3",
+    "scikit_learn": "1.8.0",
+    "pandas": "3.0.2",
+    "numpy": "2.4.4",
+    "joblib": "1.5.3"
+  },
+  "department": {
+    "best_model": "RandomForest",
+    "best_metrics": {
+      "model": "RandomForest",
+      "cv_accuracy_mean": 0.8681,
+      "cv_accuracy_std": 0.0382,
+      "cv_macro_f1_mean": 0.8649,
+      "cv_macro_f1_std": 0.0409,
+      "test_accuracy": 0.8563,
+      "test_macro_f1": 0.8432,
+      "test_weighted_f1": 0.8584
+    },
+    "model_comparison": [
+      {
+        "model": "RandomForest",
+        "cv_accuracy_mean": 0.8681,
+        "cv_accuracy_std": 0.0382,
+        "cv_macro_f1_mean": 0.8649,
+        "cv_macro_f1_std": 0.0409,
+        "test_accuracy": 0.8563,
+        "test_macro_f1": 0.8432,
+        "test_weighted_f1": 0.8584
+      },
+      {
+        "model": "LinearSVC_Calibrated",
+        "cv_accuracy_mean": 0.8613,
+        "cv_accuracy_std": 0.0511,
+        "cv_macro_f1_mean": 0.8546,
+        "cv_macro_f1_std": 0.0528,
+        "test_accuracy": 0.8879,
+        "test_macro_f1": 0.8722,
+        "test_weighted_f1": 0.888
+      },
+      {
+        "model": "LogisticRegression",
+        "cv_accuracy_mean": 0.8249,
+        "cv_accuracy_std": 0.0559,
+        "cv_macro_f1_mean": 0.8165,
+        "cv_macro_f1_std": 0.061,
+        "test_accuracy": 0.8285,
+        "test_macro_f1": 0.8128,
+        "test_weighted_f1": 0.8298
+      },
+      {
+        "model": "MultinomialNB",
+        "cv_accuracy_mean": 0.7985,
+        "cv_accuracy_std": 0.0723,
+        "cv_macro_f1_mean": 0.7919,
+        "cv_macro_f1_std": 0.0845,
+        "test_accuracy": 0.8109,
+        "test_macro_f1": 0.7885,
+        "test_weighted_f1": 0.8058
+      }
+    ],
+    "labels": [
+      "Electricity",
+      "General / Other",
+      "Roads",
+      "Sanitation",
+      "Traffic",
+      "Water"
+    ],
+    "confusion_matrix": [
+      [
+        156,
+        44,
+        12,
+        1,
+        2,
+        7
+      ],
+      [
+        1,
+        74,
+        14,
+        3,
+        1,
+        10
+      ],
+      [
+        1,
+        2,
+        188,
+        0,
+        3,
+        4
+      ],
+      [
+        3,
+        3,
+        8,
+        172,
+        1,
+        4
+      ],
+      [
+        3,
+        3,
+        4,
+        2,
+        115,
+        2
+      ],
+      [
+        2,
+        7,
+        8,
+        0,
+        0,
+        219
+      ]
+    ],
+    "language_slices": {
+      "en": {
+        "support": 585,
+        "accuracy": 0.8598,
+        "macro_f1": 0.8398
+      },
+      "hi": {
+        "support": 101,
+        "accuracy": 0.901,
+        "macro_f1": 0.596
+      },
+      "mixed": {
+        "support": 181,
+        "accuracy": 0.7956,
+        "macro_f1": 0.7214
+      },
+      "te": {
+        "support": 212,
+        "accuracy": 0.8774,
+        "macro_f1": 0.8627
+      }
+    },
+    "ablation": [
+      {
+        "feature_set": "word",
+        "test_accuracy": 0.8758,
+        "test_macro_f1": 0.8655
+      },
+      {
+        "feature_set": "char",
+        "test_accuracy": 0.8387,
+        "test_macro_f1": 0.8243
+      },
+      {
+        "feature_set": "both",
+        "test_accuracy": 0.8563,
+        "test_macro_f1": 0.8432
+      }
+    ],
+    "top_confusions": [
+      {
+        "true": "Electricity",
+        "predicted": "General / Other",
+        "count": 44
+      },
+      {
+        "true": "General / Other",
+        "predicted": "Roads",
+        "count": 14
+      },
+      {
+        "true": "Electricity",
+        "predicted": "Roads",
+        "count": 12
+      },
+      {
+        "true": "General / Other",
+        "predicted": "Water",
+        "count": 10
+      },
+      {
+        "true": "Water",
+        "predicted": "Roads",
+        "count": 8
+      },
+      {
+        "true": "Sanitation",
+        "predicted": "Roads",
+        "count": 8
+      },
+      {
+        "true": "Water",
+        "predicted": "General / Other",
+        "count": 7
+      },
+      {
+        "true": "Electricity",
+        "predicted": "Water",
+        "count": 7
+      }
+    ],
+    "sample_errors": [
+      {
+        "language": "te",
+        "true": "General / Other",
+        "predicted": "Sanitation",
+        "text": "Fire risk / Miyapur \u0c32\u0c4b \u0c30\u0c4b\u0c21\u0c4d\u0c21\u0c41 \u0c2a\u0c15\u0c4d\u0c15\u0c28 \u0c1a\u0c46\u0c24\u0c4d\u0c24 \u0c15\u0c41\u0c2a\u0c4d\u0c2a\u0c32\u0c41 \u0c2e\u0c30\u0c3f\u0c2f\u0c41 \u0c21\u0c4d\u0c30\u0c48\u0c28\u0c47\u0c1c\u0c40 \u0c38\u0c2e\u0c38\u0c4d\u0c2f \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c02\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f pls help"
+      },
+      {
+        "language": "en",
+        "true": "Electricity",
+        "predicted": "General / Other",
+        "text": "Needs repair: Power transformer fuse blowing repeatedly at Kondapur hospital gate substation"
+      },
+      {
+        "language": "en",
+        "true": "General / Other",
+        "predicted": "Roads",
+        "text": "Critical hazard - Overgrown park tree branches hanging low over walkway in LB Nagar ring road junction"
+      },
+      {
+        "language": "en",
+        "true": "Electricity",
+        "predicted": "Roads",
+        "text": "Power transformer fuse blowing repeatedly at Kondapur ring road junction substation"
+      },
+      {
+        "language": "te",
+        "true": "General / Other",
+        "predicted": "Roads",
+        "text": "problem reported - abids ring road junction \u0c26\u0c17\u0c4d\u0c17\u0c30 \u0c35\u0c40\u0c27\u0c3f \u0c15\u0c41\u0c15\u0c4d\u0c15\u0c32 \u0c2c\u0c46\u0c21\u0c26 \u0c0e\u0c15\u0c4d\u0c15\u0c41\u0c35\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f \u0c2a\u0c2c\u0c4d\u0c32\u0c3f\u0c15\u0c4d \u0c1a\u0c30\u0c4d\u0c2f\u0c32\u0c41 \u0c24\u0c40\u0c38\u0c41\u0c15\u0c4b\u0c02\u0c21\u0c3f pls help"
+      },
+      {
+        "language": "en",
+        "true": "General / Other",
+        "predicted": "Roads",
+        "text": "Critical hazard - Overgrown park tree branches hanging low over walkway in Miyapur ring road junction"
+      },
+      {
+        "language": "en",
+        "true": "Water",
+        "predicted": "Electricity",
+        "text": "Fire risk / Low hanging live electric wire near market lane in Uppal shock risk"
+      },
+      {
+        "language": "en",
+        "true": "Electricity",
+        "predicted": "General / Other",
+        "text": "power transformer fuse blowing repeatedly at gachibowli hospital gate substation"
+      }
+    ]
+  },
+  "priority": {
+    "best_model": "RandomForest",
+    "best_metrics": {
+      "model": "RandomForest",
+      "cv_accuracy_mean": 0.7998,
+      "cv_accuracy_std": 0.0052,
+      "cv_macro_f1_mean": 0.7978,
+      "cv_macro_f1_std": 0.0061,
+      "test_accuracy": 0.7813,
+      "test_macro_f1": 0.7759,
+      "test_weighted_f1": 0.7809
+    },
+    "model_comparison": [
+      {
+        "model": "RandomForest",
+        "cv_accuracy_mean": 0.7998,
+        "cv_accuracy_std": 0.0052,
+        "cv_macro_f1_mean": 0.7978,
+        "cv_macro_f1_std": 0.0061,
+        "test_accuracy": 0.7813,
+        "test_macro_f1": 0.7759,
+        "test_weighted_f1": 0.7809
+      },
+      {
+        "model": "LinearSVC_Calibrated",
+        "cv_accuracy_mean": 0.7967,
+        "cv_accuracy_std": 0.0089,
+        "cv_macro_f1_mean": 0.792,
+        "cv_macro_f1_std": 0.0095,
+        "test_accuracy": 0.7794,
+        "test_macro_f1": 0.7705,
+        "test_weighted_f1": 0.7764
+      },
+      {
+        "model": "LogisticRegression",
+        "cv_accuracy_mean": 0.7855,
+        "cv_accuracy_std": 0.015,
+        "cv_macro_f1_mean": 0.7837,
+        "cv_macro_f1_std": 0.0156,
+        "test_accuracy": 0.7748,
+        "test_macro_f1": 0.7712,
+        "test_weighted_f1": 0.776
+      },
+      {
+        "model": "MultinomialNB",
+        "cv_accuracy_mean": 0.7796,
+        "cv_accuracy_std": 0.007,
+        "cv_macro_f1_mean": 0.7742,
+        "cv_macro_f1_std": 0.0083,
+        "test_accuracy": 0.7831,
+        "test_macro_f1": 0.7748,
+        "test_weighted_f1": 0.7821
+      }
+    ],
+    "labels": [
+      "High",
+      "Low",
+      "Medium"
+    ],
+    "confusion_matrix": [
+      [
+        224,
+        21,
+        26
+      ],
+      [
+        21,
+        204,
+        77
+      ],
+      [
+        22,
+        69,
+        415
+      ]
+    ],
+    "language_slices": {
+      "en": {
+        "support": 585,
+        "accuracy": 0.7744,
+        "macro_f1": 0.7704
+      },
+      "hi": {
+        "support": 101,
+        "accuracy": 0.7723,
+        "macro_f1": 0.7803
+      },
+      "mixed": {
+        "support": 181,
+        "accuracy": 0.7956,
+        "macro_f1": 0.7895
+      },
+      "te": {
+        "support": 212,
+        "accuracy": 0.7925,
+        "macro_f1": 0.7871
+      }
+    },
+    "ablation": [
+      {
+        "feature_set": "word",
+        "test_accuracy": 0.7581,
+        "test_macro_f1": 0.764
+      },
+      {
+        "feature_set": "char",
+        "test_accuracy": 0.7896,
+        "test_macro_f1": 0.7849
+      },
+      {
+        "feature_set": "both",
+        "test_accuracy": 0.7813,
+        "test_macro_f1": 0.7759
+      }
+    ],
+    "top_confusions": [
+      {
+        "true": "Low",
+        "predicted": "Medium",
+        "count": 77
+      },
+      {
+        "true": "Medium",
+        "predicted": "Low",
+        "count": 69
+      },
+      {
+        "true": "High",
+        "predicted": "Medium",
+        "count": 26
+      },
+      {
+        "true": "Medium",
+        "predicted": "High",
+        "count": 22
+      },
+      {
+        "true": "Low",
+        "predicted": "High",
+        "count": 21
+      },
+      {
+        "true": "High",
+        "predicted": "Low",
+        "count": 21
+      }
+    ],
+    "sample_errors": [
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Valve broken on water supply pipeline at Kukatpally park corner"
+      },
+      {
+        "language": "hi",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Miyapur \u092e\u0947\u0902 metro pillar \u0915\u0947 \u092a\u093e\u0938 10 \u0926\u093f\u0928\u094b\u0902 \u0938\u0947 \u092a\u0940\u0928\u0947 \u0915\u093e \u092a\u093e\u0928\u0940 \u0938\u092a\u094d\u0932\u093e\u0908 \u0928\u0939\u0940\u0902 \u0906 \u0930\u0939\u093e \u0939\u0948"
+      },
+      {
+        "language": "mixed",
+        "true": "Low",
+        "predicted": "High",
+        "text": "Abids mein market lane ke paas water pipeline leak ho rahi hai urgent repair"
+      },
+      {
+        "language": "te",
+        "true": "High",
+        "predicted": "Low",
+        "text": "secunderabad park corner \u0c35\u0c26\u0c4d\u0c26 1 \u0c30\u0c4b\u0c1c\u0c41\u0c32\u0c41\u0c17\u0c3e \u0c24\u0c30\u0c1a\u0c41\u0c17\u0c3e \u0c15\u0c30\u0c46\u0c02\u0c1f\u0c4d \u0c15\u0c4b\u0c24\u0c32\u0c41 \u0c35\u0c3f\u0c26\u0c4d\u0c2f\u0c41\u0c24\u0c4d \u0c38\u0c2e\u0c38\u0c4d\u0c2f \u0c09\u0c02\u0c26\u0c3f"
+      },
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Valve broken on water supply pipeline at Dilsukhnagar bus stop"
+      },
+      {
+        "language": "en",
+        "true": "Medium",
+        "predicted": "Low",
+        "text": "Valve broken on water supply pipeline at Madhapur railway crossing"
+      },
+      {
+        "language": "en",
+        "true": "High",
+        "predicted": "Low",
+        "text": "Power transformer fuse blowing repeatedly at Kondapur ring road junction substation"
+      },
+      {
+        "language": "en",
+        "true": "Low",
+        "predicted": "Medium",
+        "text": "uneven dug-up road stretch near community hall in lb nagar troubling commuters"
+      }
+    ]
+  },
+  "artifact_path": "C:\\Users\\Ganesh Bathula\\OneDrive\\Desktop\\citizen_grievance_project\\ml\\models\\grievance_ml_20261128_050455.joblib",
+  "metadata_path": "C:\\Users\\Ganesh Bathula\\OneDrive\\Desktop\\citizen_grievance_project\\ml\\models\\grievance_ml_20261128_050455.json"
+}

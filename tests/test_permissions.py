@@ -63,6 +63,11 @@ def tearDownModule():
 class TestCitizenGrievanceFullSuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        os.environ["CGS_DB_PATH"] = _TMP_DB
+        os.environ["CGS_UPLOADS_DIR"] = _TMP_UPLOADS
+        os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
+        db_mod.init_db()
+        db_mod.seed_demo_accounts()
         sa_first = auth_mod.login("superadmin", "SeedTest@123")
         assert sa_first is not None and sa_first["must_change_password"] is True
         cls.superadmin = auth_mod.change_own_password(sa_first, "SeedTest@123", "SuperSecret@123")

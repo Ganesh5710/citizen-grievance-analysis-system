@@ -14,6 +14,7 @@ from ui.shared import (
     render_escalations_tab,
     render_html,
     render_performance_tab,
+    render_review_queue_tab,
     render_staff_dashboard,
 )
 
@@ -28,14 +29,18 @@ def render_admin_page(user: dict) -> None:
         """
     )
 
-    tab_complaints, tab_escalations, tab_perf = st.tabs([
+    tab_complaints, tab_review, tab_escalations, tab_perf = st.tabs([
         "Complaints",
+        "Review Queue",
         "Escalations",
         "Performance",
     ])
 
     with tab_complaints:
         render_staff_dashboard(user, key_prefix="adm")
+
+    with tab_review:
+        render_review_queue_tab(user, key_prefix="adm")
 
     with tab_escalations:
         render_escalations_tab(user, key_prefix="adm")

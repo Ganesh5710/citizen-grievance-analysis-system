@@ -25,9 +25,11 @@ from core.complaints import (
 )
 from core.departments import get_active_departments, get_all_departments
 from core.images import get_images, remove_image
+from core.ml_service import get_review_queue, resolve_review_item
 from core.performance import get_employee_own_performance, get_performance_metrics
 from core.permissions import can
 from core.sla import acknowledge_escalation, run_escalation_check
+from ml.classifier import explain_with_lime, has_emergency_keyword
 
 STATUS_OPTIONS = list(VALID_STATUSES)
 PRIORITY_OPTIONS = list(VALID_PRIORITIES)
@@ -744,8 +746,30 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
             or q in (c.get("assigned_username") or "unassigned").lower()
         ]
 
-    st.dataframe(build_complaints_df(filtered), width="stretch", hide_index=True)
-    st.caption(f"Showing {len(filtered)} of {total} complaints")
+    page_size = 25
+    total_filtered = len(filtered)
+    total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+    page_key = f"{key_prefix}_page_num"
+    cur_page = min(int(st.session_state.get(page_key, 1)), total_pages)
+    if total_pages > 1:
+        pcol1, pcol2 = st.columns([1, 3], vertical_alignment="center")
+        with pcol1:
+            cur_page = st.number_input(
+                f"Page (1 - {total_pages})",
+                min_value=1,
+                max_value=total_pages,
+                value=cur_page,
+                step=1,
+                key=page_key,
+            )
+        with pcol2:
+            st.caption(f"Showing page {cur_page} of {total_pages} ({total_filtered} matching, {total} total)")
+    start_idx = (int(cur_page) - 1) * page_size
+    page_rows = filtered[start_idx : start_idx + page_size]
+
+    st.dataframe(build_complaints_df(page_rows), width="stretch", hide_index=True)
+    if total_pages <= 1:
+        st.caption(f"Showing {total_filtered} of {total} complaints")
 
     st.markdown("---")
     st.markdown("### Complaint Detail and History")
@@ -780,6 +804,7 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
         return
 
     render_complaint_card(detail)
+    _render_ml_explainability_panel(detail, key_prefix)
     render_attachments(user, detail["id"], key_prefix)
     st.markdown("#### Audit History")
     render_history(detail["id"], user)
@@ -975,3 +1000,206 @@ def render_performance_tab(user: dict) -> None:
             labels={"value": "Complaints", "username": "Employee", "variable": "State"},
         )
         st.plotly_chart(fig_emp, width="stretch", theme="streamlit")
+
+
+def _render_ml_explainability_panel(detail: dict, key_prefix: str) -> None:
+    """Display ML department suggestion, confidence, top contributing terms, and LIME attribution."""
+    sugg = detail.get("ml_suggested_department")
+    conf = detail.get("ml_confidence")
+    terms = detail.get("ml_top_terms") or []
+    emergency = has_emergency_keyword(detail.get("text", ""))
+
+    if not sugg and not emergency:
+        return
+
+    with st.expander("AI Classification and Explainability"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ML Suggested Department", sugg or "N/A")
+        c2.metric("Confidence", f"{round(float(conf) * 100, 1)}%" if conf is not None else "N/A")
+        c3.metric("Emergency Keyword Rule", "Triggered (High)" if emergency else "Not triggered")
+
+        if sugg and sugg.lower() != str(detail.get("department", "")).lower():
+            st.warning(
+                f"Citizen chose '{detail.get('department')}', while ML suggested '{sugg}'."
+            )
+
+        if terms:
+            st.caption("Top weighted model features for predicted class:")
+            term_df = pd.DataFrame(
+                [{"Term / N-gram": t.get("term", ""), "Contribution Weight": t.get("weight", 0.0)} for t in terms]
+            )
+            st.dataframe(term_df, width="stretch", hide_index=True)
+
+        lime_key = f"{key_prefix}_lime_cache_{detail['id']}"
+        if st.button("Compute LIME Word Attribution", key=f"{key_prefix}_lime_btn_{detail['id']}"):
+            st.session_state[lime_key] = explain_with_lime(detail.get("text", ""), num_features=8)
+
+        if lime_key in st.session_state:
+            lime_terms = st.session_state[lime_key]
+            if lime_terms:
+                lime_df = pd.DataFrame(
+                    [{"Word / Phrase": item["term"], "LIME Weight": item["weight"]} for item in lime_terms]
+                )
+                fig_lime = px.bar(
+                    lime_df,
+                    x="LIME Weight",
+                    y="Word / Phrase",
+                    orientation="h",
+                    title="LIME Local Explanation",
+                )
+                fig_lime.update_layout(height=280)
+                st.plotly_chart(fig_lime, width="stretch", theme="streamlit")
+            else:
+                st.caption("LIME attribution unavailable in fallback mode.")
+
+
+def render_review_queue_tab(user: dict, key_prefix: str) -> None:
+    """Paginated Review Queue for Admin and Super Admin."""
+    if not can(user, "view_review_queue"):
+        st.error("Permission denied.")
+        return
+
+    flash_key = f"{key_prefix}_rq_flash"
+    if flash_key in st.session_state:
+        st.success(st.session_state.pop(flash_key))
+
+    st.markdown("### AI Review Queue")
+    st.caption(
+        "Complaints flagged for low ML confidence, citizen-vs-ML department disagreement, "
+        "photo disagreement, or suspected spam."
+    )
+
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        status_filter = st.selectbox(
+            "Queue Status",
+            options=["Pending", "Resolved", "All"],
+            index=0,
+            key=f"{key_prefix}_rq_status_filter",
+        )
+    with col_f2:
+        page_num = int(
+            st.number_input(
+                "Page",
+                min_value=1,
+                value=1,
+                step=1,
+                key=f"{key_prefix}_rq_page",
+            )
+        )
+
+    page_size = 20
+    offset = (page_num - 1) * page_size
+    items = get_review_queue(
+        user,
+        status_filter=None if status_filter == "All" else status_filter,
+        limit=page_size,
+        offset=offset,
+    )
+
+    if not items:
+        st.info("No review items match the selected filter.")
+        return
+
+    df_rq = pd.DataFrame([
+        {
+            "Review ID": it["id"],
+            "Incident ID": it["incident_id"],
+            "Reason": it["reason"],
+            "Citizen Dept": it["citizen_department"],
+            "ML Suggested": it.get("ml_suggested_department") or "",
+            "Confidence": round(float(it["ml_confidence"]), 3) if it.get("ml_confidence") is not None else None,
+            "Current Dept": it["current_department_name"],
+            "Status": it["status"],
+            "Action": it.get("resolution_action") or "",
+            "Created (UTC)": it["created_at"],
+        }
+        for it in items
+    ])
+    st.dataframe(df_rq, width="stretch", hide_index=True)
+
+    pending_items = [it for it in items if it["status"] == "Pending"]
+    if not pending_items or not can(user, "resolve_review_item"):
+        return
+
+    st.markdown("---")
+    st.markdown("#### Resolve Flagged Item")
+    selected_rq_id = st.selectbox(
+        "Select Pending Review Item",
+        options=[it["id"] for it in pending_items],
+        format_func=lambda rid: next(
+            f"#{x['incident_id']} - {x['reason']} (Citizen: {x['citizen_department']} vs ML: {x.get('ml_suggested_department') or 'N/A'})"
+            for x in pending_items if x["id"] == rid
+        ),
+        key=f"{key_prefix}_rq_select",
+    )
+    selected_item = next(x for x in pending_items if x["id"] == selected_rq_id)
+    st.info(f"Complaint text: {selected_item['complaint_text']}")
+
+    active_depts = get_active_departments()
+    dept_ids = [d["id"] for d in active_depts]
+    dept_labels = {d["id"]: d["name"] for d in active_depts}
+
+    note_val = st.text_input(
+        "Resolution Note (optional)",
+        key=f"{key_prefix}_rq_note_{selected_item['id']}",
+        placeholder="Reason for keeping citizen choice or rerouting...",
+    )
+
+    c_b1, c_b2, c_b3 = st.columns([1, 1, 2])
+    with c_b1:
+        if st.button(
+            f"Keep '{selected_item['citizen_department']}'",
+            key=f"{key_prefix}_rq_keep_{selected_item['id']}",
+            width="stretch",
+        ):
+            try:
+                resolve_review_item(user, selected_item["id"], "Keep Citizen", note=note_val)
+                st.session_state[flash_key] = f"Kept citizen department for #{selected_item['incident_id']}."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    with c_b2:
+        ml_sugg = selected_item.get("ml_suggested_department") or ""
+        if st.button(
+            f"Accept ML ({ml_sugg or 'N/A'})",
+            key=f"{key_prefix}_rq_accept_{selected_item['id']}",
+            type="primary",
+            disabled=not bool(ml_sugg),
+            width="stretch",
+        ):
+            try:
+                resolve_review_item(user, selected_item["id"], "Accept ML", note=note_val)
+                st.session_state[flash_key] = f"Accepted ML department '{ml_sugg}' for #{selected_item['incident_id']}."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    with c_b3:
+        if dept_ids:
+            custom_dept_id = st.selectbox(
+                "Or Select Other Department",
+                options=dept_ids,
+                format_func=lambda did: dept_labels[did],
+                key=f"{key_prefix}_rq_custom_dept_{selected_item['id']}",
+            )
+            if st.button(
+                "Apply Custom Department",
+                key=f"{key_prefix}_rq_custom_btn_{selected_item['id']}",
+            ):
+                try:
+                    resolve_review_item(
+                        user,
+                        selected_item["id"],
+                        "Custom Department",
+                        target_department_id=custom_dept_id,
+                        note=note_val,
+                    )
+                    st.session_state[flash_key] = (
+                        f"Reassigned #{selected_item['incident_id']} to '{dept_labels[custom_dept_id]}'."
+                    )
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+

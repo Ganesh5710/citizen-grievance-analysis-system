@@ -29,11 +29,13 @@ from core.departments import (
     rename_department,
     set_department_active,
 )
+from core.ml_service import activate_ml_model, list_ml_models, retrain_ml_models
 from core.sla import VALID_PRIORITIES, get_sla_policies, update_sla_policy
 from ui.shared import (
     render_escalations_tab,
     render_html,
     render_performance_tab,
+    render_review_queue_tab,
     render_staff_dashboard,
 )
 
@@ -445,6 +447,70 @@ def _render_sla_settings(user: dict) -> None:
                 st.error(str(exc))
 
 
+def _render_ml_models_tab(user: dict) -> None:
+    """Super Admin ML model registry: retrain without auto-activation & manually activate versions."""
+    if "sa_ml_flash" in st.session_state:
+        st.success(st.session_state.pop("sa_ml_flash"))
+
+    st.markdown("### ML Model Versions")
+    st.caption(
+        "Retraining trains on data/synthetic_complaints.csv plus reviewed complaints and saves a "
+        "new versioned artifact without auto-activating it. Activate a version only after checking metrics."
+    )
+
+    if st.button("Retrain Candidate Model Version", key="sa_ml_retrain_btn", type="primary"):
+        with st.spinner("Training and evaluating candidate models..."):
+            try:
+                meta = retrain_ml_models(user)
+                st.session_state["sa_ml_flash"] = (
+                    f"Trained candidate version {meta['version']} "
+                    f"(Dept {meta['department']['best_model']} F1={meta['department']['best_metrics']['test_macro_f1']}, "
+                    f"Priority {meta['priority']['best_model']} F1={meta['priority']['best_metrics']['test_macro_f1']}). "
+                    "Not activated automatically."
+                )
+                st.rerun()
+            except (PermissionError, Exception) as exc:
+                st.error(f"Retraining failed: {exc}")
+
+    models = list_ml_models(user)
+    if not models:
+        st.info("No trained ML model artifacts found yet. Run scripts/train.py or click Retrain above.")
+        return
+
+    df_models = pd.DataFrame([
+        {
+            "Version": m["version"],
+            "Active": "ACTIVE" if m["is_active"] else "Candidate",
+            "Dept Model": m["dept_model_name"],
+            "Dept Test F1": round(float(m["dept_test_f1"]), 4) if m.get("dept_test_f1") is not None else None,
+            "Priority Model": m["priority_model_name"],
+            "Priority Test F1": round(float(m["priority_test_f1"]), 4) if m.get("priority_test_f1") is not None else None,
+            "Rows": m["training_rows"],
+            "Created By": m["created_by_username"],
+            "Created (UTC)": m["created_at"],
+            "Activated (UTC)": m.get("activated_at") or "",
+        }
+        for m in models
+    ])
+    st.dataframe(df_models, width="stretch", hide_index=True)
+
+    inactive = [m for m in models if not m["is_active"]]
+    if inactive:
+        st.markdown("#### Activate a Model Version")
+        sel_ver = st.selectbox(
+            "Candidate Version",
+            options=[m["version"] for m in inactive],
+            key="sa_ml_activate_select",
+        )
+        if st.button("Activate Selected Version", key="sa_ml_activate_btn"):
+            try:
+                activate_ml_model(user, sel_ver)
+                st.session_state["sa_ml_flash"] = f"Activated ML model version {sel_ver}."
+                st.rerun()
+            except (PermissionError, ValueError, FileNotFoundError) as exc:
+                st.error(str(exc))
+
+
 def render_super_admin_page(user: dict) -> None:
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     render_html(
@@ -455,17 +521,22 @@ def render_super_admin_page(user: dict) -> None:
         """
     )
 
-    tab_complaints, tab_escalations, tab_perf, tab_users, tab_departments, tab_sla = st.tabs([
+    tab_complaints, tab_review, tab_escalations, tab_perf, tab_users, tab_departments, tab_sla, tab_ml = st.tabs([
         "Complaints",
+        "Review Queue",
         "Escalations",
         "Performance",
         "User Management",
         "Departments",
         "SLA Settings",
+        "ML Models",
     ])
 
     with tab_complaints:
         render_staff_dashboard(user, key_prefix="sa")
+
+    with tab_review:
+        render_review_queue_tab(user, key_prefix="sa")
 
     with tab_escalations:
         render_escalations_tab(user, key_prefix="sa")
@@ -481,3 +552,6 @@ def render_super_admin_page(user: dict) -> None:
 
     with tab_sla:
         _render_sla_settings(user)
+
+    with tab_ml:
+        _render_ml_models_tab(user)

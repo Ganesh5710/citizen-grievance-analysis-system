@@ -5,9 +5,11 @@ scoping, detail, audit history, claim, assign/reassign, updates, feedback/reopen
 
 from contextlib import closing
 from datetime import datetime, timezone
+import json
 import uuid
 
 from core.classifier import classify
+from core.config import get_env_float
 import core.database as _db
 from core.images import (
     MAX_IMAGES_PER_COMPLAINT,
@@ -19,6 +21,7 @@ from core.permissions import require
 from core.security import sanitize_text
 from core.sla import AUTO_CLOSE_DAYS, compute_due_at, parse_utc
 from core.wards import find_nearest_ward
+from ml.classifier import predict_complaint
 
 VALID_STATUSES = ("Pending", "Assigned", "In Progress", "Resolved", "Reopened", "Closed")
 VALID_PRIORITIES = ("High", "Medium", "Low")
@@ -97,6 +100,9 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "resolved_at":          row["resolved_at"],
         "reopen_count":         int(row["reopen_count"] or 0),
         "photo_count":          int(photo_count),
+        "ml_suggested_department": row["ml_suggested_department"],
+        "ml_confidence":        row["ml_confidence"],
+        "ml_top_terms":         json.loads(row["ml_top_terms"] or "[]") if isinstance(row["ml_top_terms"], str) else [],
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
     }
@@ -126,6 +132,9 @@ SELECT c.id,
        c.escalation_level,
        c.resolved_at,
        c.reopen_count,
+       c.ml_suggested_department,
+       c.ml_confidence,
+       c.ml_top_terms,
        c.is_deleted,
        c.created_at,
        c.updated_at
@@ -174,7 +183,14 @@ def submit_complaint(
     # Validate & strip EXIF/GPS before touching the database
     prepared_images = prepare_images(file_list)
 
-    _, priority = classify(clean_text)
+    _, rule_priority = classify(clean_text)
+    ml_pred = predict_complaint(clean_text)
+    priority = "High" if (rule_priority == "High" or ml_pred.get("emergency_override")) else ml_pred["priority"]
+    ml_suggested_dept = ml_pred.get("department")
+    ml_confidence = float(ml_pred.get("confidence", 0.0))
+    ml_top_terms_json = json.dumps(ml_pred.get("top_terms", []))
+    conf_threshold = get_env_float("ML_CONFIDENCE_THRESHOLD", 0.60)
+
     incident_id = "CIV-" + uuid.uuid4().hex[:8].upper()
     now_dt = _utc_now()
     now_str = _fmt_dt(now_dt)
@@ -208,8 +224,8 @@ def submit_complaint(
             INSERT INTO complaints
                 (incident_id, user_id, text, location, department_id, ward_id, latitude, longitude,
                  priority, status, assigned_to, assigned_at, due_at, escalation_level, reopen_count,
-                 is_deleted, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?)
+                 is_deleted, ml_suggested_department, ml_confidence, ml_top_terms, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
             """,
             (
                 incident_id,
@@ -224,11 +240,38 @@ def submit_complaint(
                 assigned_to,
                 assigned_at,
                 due_at,
+                ml_suggested_dept,
+                ml_confidence,
+                ml_top_terms_json,
                 now_str,
                 now_str,
             ),
         )
         complaint_id = cursor.lastrowid
+
+        # Flag low ML confidence or citizen-vs-ML department disagreement for Admin/Super Admin review
+        review_reasons: list[str] = []
+        if ml_confidence < conf_threshold:
+            review_reasons.append("Low ML confidence")
+        if ml_suggested_dept and ml_suggested_dept.strip().lower() != dept["name"].strip().lower():
+            review_reasons.append("Citizen-ML department mismatch")
+        if review_reasons:
+            conn.execute(
+                """
+                INSERT INTO review_queue
+                    (complaint_id, reason, ml_suggested_department, ml_confidence,
+                     citizen_department, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'Pending', ?)
+                """,
+                (
+                    complaint_id,
+                    "; ".join(review_reasons),
+                    ml_suggested_dept,
+                    ml_confidence,
+                    dept["name"],
+                    now_str,
+                ),
+            )
 
         conn.execute(
             """

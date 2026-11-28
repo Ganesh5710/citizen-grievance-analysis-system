@@ -20,6 +20,7 @@ from core.complaints import (
 from core.departments import get_active_departments
 from core.images import MAX_IMAGES_PER_COMPLAINT, add_images
 from core.sla import AUTO_CLOSE_DAYS, parse_utc
+from ml.classifier import predict_complaint
 from ui.shared import (
     build_complaints_df,
     render_attachments,
@@ -99,7 +100,30 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
             key=f"citizen_upload_{form_gen}",
         )
         st.caption("Privacy notice: EXIF and GPS location data are automatically removed from uploaded photos.")
-        submitted = st.form_submit_button("Submit Complaint", type="primary")
+        col_sub, col_chk = st.columns([2, 1])
+        with col_sub:
+            submitted = st.form_submit_button("Submit Complaint", type="primary")
+        with col_chk:
+            preview_clicked = st.form_submit_button("Preview AI Hint")
+
+    if preview_clicked:
+        if len(complaint_text.strip()) < 10:
+            st.warning("Enter at least 10 characters in the description to preview the AI suggestion.")
+        else:
+            pred = predict_complaint(complaint_text.strip())
+            sugg_dept = pred.get("department", dept["name"])
+            conf_pct = round(float(pred.get("confidence", 0.0)) * 100)
+            sugg_prio = pred.get("priority", "Medium")
+            if sugg_dept.lower() != dept["name"].lower():
+                st.info(
+                    f"Non-blocking AI hint: This description looks similar to '{sugg_dept}' "
+                    f"({conf_pct}% confidence, estimated priority: {sugg_prio}). "
+                    "You can keep your selected department or click 'Change department' above."
+                )
+            else:
+                st.success(
+                    f"AI matches '{dept['name']}' ({conf_pct}% confidence, estimated priority: {sugg_prio})."
+                )
 
     if uploaded_files:
         st.caption("Photo preview:")
@@ -138,10 +162,20 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
                 None,
             )
             priority_text = saved["priority"] if saved else "Assigned"
+            ml_hint = ""
+            if saved and saved.get("ml_suggested_department") and (
+                saved["ml_suggested_department"].lower() != dept["name"].lower()
+            ):
+                conf_pct = round(float(saved.get("ml_confidence") or 0.0) * 100)
+                ml_hint = (
+                    f" Note: AI suggested '{saved['ml_suggested_department']}' ({conf_pct}% confidence); "
+                    "an administrator may review category routing if needed."
+                )
             st.session_state["citizen_last_ticket"] = {
                 "incident_id": incident_id,
                 "department":  dept["name"],
                 "priority":    priority_text,
+                "ml_hint":     ml_hint,
             }
             st.session_state.pop("citizen_selected_dept_id", None)
             st.session_state["citizen_form_gen"] = form_gen + 1
@@ -250,6 +284,7 @@ def render_citizen_page(user: dict) -> None:
                 f"Complaint submitted. Ticket ID: {ticket['incident_id']} | "
                 f"Department: {ticket['department']} | "
                 f"Detected Priority: {ticket['priority']}."
+                f"{ticket.get('ml_hint', '')}"
             )
 
         active_depts = get_active_departments()

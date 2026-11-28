@@ -27,6 +27,16 @@ def get_db_path() -> Path:
     return Path(override) if override else DEFAULT_DB_PATH
 
 
+def utc_now_str(now: datetime | None = None) -> str:
+    """Return current UTC timestamp formatted as 'YYYY-MM-DD HH:MM:SS'."""
+    dt = now or datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 DB_PATH: Path = get_db_path()
 
 # ---------------------------------------------------------------------------
@@ -117,11 +127,14 @@ CREATE TABLE IF NOT EXISTS complaints (
     assigned_at      TEXT,
     due_at           TEXT,
     escalation_level INTEGER NOT NULL DEFAULT 0 CHECK(escalation_level IN (0, 1, 2)),
-    resolved_at      TEXT,
-    reopen_count     INTEGER NOT NULL DEFAULT 0,
-    is_deleted       INTEGER NOT NULL DEFAULT 0,
-    created_at       TEXT DEFAULT (datetime('now')),
-    updated_at       TEXT DEFAULT (datetime('now'))
+    resolved_at             TEXT,
+    reopen_count            INTEGER NOT NULL DEFAULT 0,
+    is_deleted              INTEGER NOT NULL DEFAULT 0,
+    ml_suggested_department TEXT,
+    ml_confidence           REAL,
+    ml_top_terms            TEXT DEFAULT '[]',
+    created_at              TEXT DEFAULT (datetime('now')),
+    updated_at              TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS complaint_updates (
@@ -163,6 +176,38 @@ CREATE TABLE IF NOT EXISTS complaint_feedback (
     accepted         INTEGER NOT NULL CHECK(accepted IN (0, 1)),
     created_at       TEXT DEFAULT (datetime('now')),
     UNIQUE(complaint_id, resolution_cycle)
+);
+
+CREATE TABLE IF NOT EXISTS review_queue (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    complaint_id            INTEGER NOT NULL REFERENCES complaints(id),
+    reason                  TEXT NOT NULL,
+    ml_suggested_department TEXT,
+    ml_confidence           REAL,
+    citizen_department      TEXT DEFAULT '',
+    status                  TEXT NOT NULL DEFAULT 'Pending' CHECK(status IN ('Pending', 'Resolved')),
+    resolution_action       TEXT DEFAULT '',
+    resolved_department     TEXT DEFAULT '',
+    resolved_by             INTEGER REFERENCES users(id),
+    resolution_note         TEXT DEFAULT '',
+    created_at              TEXT DEFAULT (datetime('now')),
+    resolved_at             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ml_models (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    version            TEXT UNIQUE NOT NULL,
+    artifact_path      TEXT NOT NULL,
+    metadata_path      TEXT NOT NULL,
+    dept_model_name    TEXT DEFAULT '',
+    dept_test_f1       REAL,
+    priority_model_name TEXT DEFAULT '',
+    priority_test_f1   REAL,
+    training_rows      INTEGER DEFAULT 0,
+    is_active          INTEGER NOT NULL DEFAULT 0,
+    created_by         INTEGER REFERENCES users(id),
+    created_at         TEXT DEFAULT (datetime('now')),
+    activated_at       TEXT
 );
 """
 
@@ -536,6 +581,14 @@ def init_db() -> None:
             _migrate_complaints(conn)
             _migrate_complaint_updates(conn)
             conn.executescript(_SCHEMA_SQL)
+            c_cols = _table_columns(conn, "complaints")
+            for col_name, col_def in (
+                ("ml_suggested_department", "TEXT"),
+                ("ml_confidence", "REAL"),
+                ("ml_top_terms", "TEXT DEFAULT '[]'"),
+            ):
+                if col_name not in c_cols:
+                    conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")
             _seed_departments_in_conn(conn)
             _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
