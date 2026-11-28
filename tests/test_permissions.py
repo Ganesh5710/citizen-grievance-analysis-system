@@ -30,6 +30,8 @@ _TMP_UPLOADS = os.path.join(_TMP_DIR, "uploads")
 os.environ["CGS_DB_PATH"] = _TMP_DB
 os.environ["CGS_UPLOADS_DIR"] = _TMP_UPLOADS
 os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
+os.environ["CGS_DAILY_SUBMISSION_LIMIT"] = "50"
+os.environ["CGS_SUBMISSION_COOLDOWN_SECONDS"] = "0"
 
 import core.auth as auth_mod
 import core.classifier as classifier_mod

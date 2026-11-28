@@ -1509,6 +1509,36 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
                 st.error(str(exc))
 
     with c_b3:
+        m_c1, m_c2 = st.columns(2)
+        with m_c1:
+            if st.button(
+                "Mark Valid / Release",
+                key=f"{key_prefix}_rq_valid_{selected_item['id']}",
+                width="stretch",
+            ):
+                try:
+                    resolve_review_item(
+                        user, selected_item["id"], "Marked Valid", note=note_val, corrected_priority=corr_prio
+                    )
+                    st.session_state[flash_key] = f"Marked #{selected_item['incident_id']} valid and released."
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+        with m_c2:
+            if st.button(
+                "Confirm Spam",
+                key=f"{key_prefix}_rq_spam_{selected_item['id']}",
+                width="stretch",
+            ):
+                try:
+                    resolve_review_item(
+                        user, selected_item["id"], "Confirmed Spam", note=note_val
+                    )
+                    st.session_state[flash_key] = f"Confirmed spam for #{selected_item['incident_id']}."
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+
         if dept_ids:
             custom_dept_id = st.selectbox(
                 "Or Select Other Department",

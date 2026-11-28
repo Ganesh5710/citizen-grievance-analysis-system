@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS users (
     email_verified        INTEGER NOT NULL DEFAULT 0,
     email_notifications   INTEGER NOT NULL DEFAULT 1,
     in_app_notifications  INTEGER NOT NULL DEFAULT 1,
+    confirmed_spam_count  INTEGER NOT NULL DEFAULT 0,
+    spam_blocked_until    TEXT,
     created_at            TEXT DEFAULT (datetime('now'))
 );
 
@@ -220,6 +222,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     resolved_at             TEXT,
     reopen_count            INTEGER NOT NULL DEFAULT 0,
     is_deleted              INTEGER NOT NULL DEFAULT 0,
+    is_spam                 INTEGER NOT NULL DEFAULT 0,
     is_demo_spike           INTEGER NOT NULL DEFAULT 0,
     ml_suggested_department TEXT,
     ml_confidence           REAL,
@@ -373,6 +376,18 @@ CREATE TABLE IF NOT EXISTS location_load_logs (
     notes                TEXT DEFAULT '',
     loaded_at            TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS moderation_audit_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id        INTEGER REFERENCES users(id),
+    actor_username  TEXT NOT NULL DEFAULT '',
+    target_user_id  INTEGER REFERENCES users(id),
+    target_username TEXT NOT NULL DEFAULT '',
+    complaint_id    INTEGER REFERENCES complaints(id),
+    action          TEXT NOT NULL,
+    reason          TEXT DEFAULT '',
+    created_at      TEXT DEFAULT (datetime('now'))
+);
 """
 
 _DEFAULT_DEPARTMENTS = [
@@ -503,6 +518,8 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         ("email_verified",        "INTEGER NOT NULL DEFAULT 0"),
         ("email_notifications",   "INTEGER NOT NULL DEFAULT 1"),
         ("in_app_notifications",  "INTEGER NOT NULL DEFAULT 1"),
+        ("confirmed_spam_count",  "INTEGER NOT NULL DEFAULT 0"),
+        ("spam_blocked_until",    "TEXT"),
     ]
     for col_name, col_def in add_cols:
         if col_name not in cols:
@@ -822,6 +839,7 @@ def init_db() -> None:
                 ("is_recurring", "INTEGER NOT NULL DEFAULT 0"),
                 ("priority_reason", "TEXT DEFAULT ''"),
                 ("incident_group_id", "INTEGER REFERENCES incident_groups(id)"),
+                ("is_spam", "INTEGER NOT NULL DEFAULT 0"),
                 ("is_demo_spike", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col_name not in c_cols:

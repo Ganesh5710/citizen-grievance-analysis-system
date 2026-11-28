@@ -50,6 +50,8 @@ SELECT u.id,
        u.email_verified,
        u.email_notifications,
        u.in_app_notifications,
+       u.confirmed_spam_count,
+       u.spam_blocked_until,
        u.created_at
 FROM users u
 LEFT JOIN departments d ON d.id = u.department_id
@@ -150,6 +152,8 @@ def _row_to_user(row: sqlite3.Row) -> dict:
         "email_verified":       bool(row["email_verified"]) if "email_verified" in keys else False,
         "email_notifications":  bool(row["email_notifications"]) if "email_notifications" in keys else True,
         "in_app_notifications": bool(row["in_app_notifications"]) if "in_app_notifications" in keys else True,
+        "confirmed_spam_count": int(row["confirmed_spam_count"] or 0) if "confirmed_spam_count" in keys else 0,
+        "spam_blocked_until":   row["spam_blocked_until"] if "spam_blocked_until" in keys else None,
     }
 
 

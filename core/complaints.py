@@ -20,6 +20,7 @@ from core.images import (
     save_prepared_images_in_conn,
 )
 from core.locations import resolve_location_selection
+from core.moderation import assess_submission_safety
 from core.permissions import require
 from core.security import sanitize_text
 from core.sla import AUTO_CLOSE_DAYS, compute_due_at, parse_utc
@@ -193,6 +194,7 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "cluster_member_count": int(row["cluster_member_count"] or 1),
         "cluster_support_count": int(row["cluster_support_count"] or 0),
         "report_count":         int(row["cluster_member_count"] or 1) + int(row["cluster_support_count"] or 0),
+        "is_spam":              int(row["is_spam"] or 0),
         "district_allow_self_claim": bool(row["district_allow_self_claim"] or 0),
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
@@ -250,6 +252,7 @@ SELECT c.id,
        c.is_recurring,
        c.priority_reason,
        c.incident_group_id,
+       COALESCE(c.is_spam, 0) AS is_spam,
        COALESCE(ig.member_count, 1) AS cluster_member_count,
        COALESCE(ig.support_count, (
            SELECT COUNT(*) FROM complaint_supports cs WHERE cs.complaint_id = c.id
@@ -379,8 +382,11 @@ def submit_complaint(
 
         due_at = compute_due_at(conn, department_id, priority, now_dt)
 
-        # Always route to 'Awaiting Assignment' for Admin review; never auto-assign.
-        initial_status = "Awaiting Assignment"
+        safety = assess_submission_safety(conn, actor, clean_text, now=now_dt)
+        is_spam_val = 1 if safety["is_flagged"] else 0
+
+        # Flagged spam starts in 'Submitted' (never assigned); normal goes to 'Awaiting Assignment'
+        initial_status = "Submitted" if safety["is_flagged"] else "Awaiting Assignment"
         assignee = None
         assigned_to = None
         assigned_at = None
@@ -392,10 +398,10 @@ def submit_complaint(
                  state_id, district_id, mandal_id, area_id, pincode,
                  latitude, longitude,
                  priority, status, assigned_to, assigned_at, due_at, escalation_level, reopen_count,
-                 is_deleted, ml_suggested_department, ml_confidence, ml_top_terms,
+                 is_deleted, is_spam, ml_suggested_department, ml_confidence, ml_top_terms,
                  duration_hours, duration_matched_text, duration_confidence, is_recurring, priority_reason,
                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 incident_id,
@@ -416,6 +422,7 @@ def submit_complaint(
                 assigned_to,
                 assigned_at,
                 due_at,
+                is_spam_val,
                 ml_suggested_dept,
                 ml_confidence,
                 ml_top_terms_json,
@@ -430,8 +437,10 @@ def submit_complaint(
         )
         complaint_id = cursor.lastrowid
 
-        # Flag low ML confidence, citizen-vs-ML department disagreement, or low duration confidence
+        # Flag suspected spam, low ML confidence, citizen-ML mismatch, or low duration confidence
         review_reasons: list[str] = []
+        if safety["is_flagged"]:
+            review_reasons.append(safety["queue_reason"])
         if ml_confidence < conf_threshold:
             review_reasons.append("Low ML confidence")
         if ml_suggested_dept and ml_suggested_dept.strip().lower() != dept["name"].strip().lower():

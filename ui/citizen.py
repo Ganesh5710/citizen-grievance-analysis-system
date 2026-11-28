@@ -29,6 +29,7 @@ from core.locations import (
     get_states,
     lookup_pincode,
 )
+from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from core.sla import AUTO_CLOSE_DAYS, parse_utc
 from ml.classifier import predict_complaint
 from ui.shared import (
@@ -250,6 +251,10 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
         chosen_lon = manual_lon if manual_lon != 0.0 else centroid_lon
 
     # clear_on_submit=False preserves typed text when validation fails
+    cap_on = is_captcha_enabled()
+    if cap_on and f"cit_cap_{form_gen}" not in st.session_state:
+        st.session_state[f"cit_cap_{form_gen}"] = generate_captcha_challenge()
+
     with st.form(key=f"citizen_submit_form_{form_gen}", clear_on_submit=False):
         complaint_text = st.text_area(
             "Complaint Description (required, min 10 characters)",
@@ -268,6 +273,10 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
             accept_multiple_files=True,
             key=f"citizen_upload_{form_gen}",
         )
+        cap_ans = None
+        if cap_on:
+            cap_q, _ = st.session_state[f"cit_cap_{form_gen}"]
+            cap_ans = st.text_input(cap_q, key=f"citizen_cap_ans_{form_gen}")
         st.caption("Privacy notice: EXIF and GPS location data are automatically removed from uploaded photos.")
         col_sub, col_chk = st.columns([2, 1])
         with col_sub:
@@ -305,6 +314,10 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
                     st.caption(f"Preview unavailable: {fobj.name}")
 
     if submitted:
+        if cap_on and not verify_captcha_answer(st.session_state[f"cit_cap_{form_gen}"][1], cap_ans):
+            st.error("Security arithmetic check failed. Please enter the correct answer.")
+            st.session_state[f"cit_cap_{form_gen}"] = generate_captcha_challenge()
+            return
         text_stripped = complaint_text.strip()
         loc_stripped = location.strip()
 

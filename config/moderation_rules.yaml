@@ -1,0 +1,43 @@
+# Phase 4: Abuse Control, Profanity Word Lists & Gibberish Thresholds
+abuse_words:
+  en:
+    - idiot
+    - stupid
+    - bastard
+    - bullshit
+    - dumbass
+    - asshole
+    - moron
+    - scammer
+  hi:
+    - chutiya
+    - harami
+    - kameena
+    - bakwas
+    - bewakoof
+    - gaali
+    - चूतिया
+    - हरामी
+    - कमीना
+    - बेवकूफ
+  te:
+    - pichoda
+    - donga
+    - yedava
+    - chetta
+    - పిచ్చోడా
+    - దొంగ
+    - ఎదవ
+    - వెధవ
+
+gibberish:
+  max_repeat_char_run: 5
+  min_latin_vowel_ratio: 0.14
+  min_unique_token_ratio: 0.30
+  min_alpha_char_ratio: 0.35
+
+spam_thresholds:
+  daily_limit: 10
+  cooldown_seconds: 5
+  confirmed_spam_block_threshold: 3
+  block_duration_days: 7

@@ -258,6 +258,8 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
         os.environ["CGS_UPLOADS_DIR"] = os.path.join(cls._tmp_root, "uploads")
         os.environ["CGS_PRIORITY_RULES_PATH"] = cls._yaml_path
         os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
+        os.environ["CGS_DAILY_SUBMISSION_LIMIT"] = "50"
+        os.environ["CGS_SUBMISSION_COOLDOWN_SECONDS"] = "0"
 
         import core.auth as auth_mod
         import core.complaints as comp_mod

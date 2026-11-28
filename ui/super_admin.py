@@ -42,6 +42,7 @@ from core.locations import (
     set_district_self_claim,
 )
 from core.ml_service import activate_ml_model, list_ml_models, retrain_ml_models
+from core.moderation import get_moderation_audit_logs, lift_spam_block
 from core.oversight import (
     get_admin_oversight_metrics,
     get_audit_logs_filtered,
@@ -435,6 +436,31 @@ def _render_user_management(user: dict) -> None:
                 st.rerun()
             except (PermissionError, ValueError) as exc:
                 st.error(str(exc))
+
+    if target.get("spam_blocked_until") or target.get("confirmed_spam_count", 0) > 0:
+        st.markdown("#### Spam Block & Moderation Controls")
+        st.warning(
+            f"Confirmed spam count: {target.get('confirmed_spam_count', 0)} | "
+            f"Blocked until (UTC): {target.get('spam_blocked_until') or 'Not blocked'}"
+        )
+        lift_reason = st.text_input(
+            "Reason for lifting spam block (required, min 5 chars)",
+            key=f"sa_lift_reason_{target_ver}",
+            placeholder="e.g. Citizen verified genuine issue after warning",
+        )
+        if st.button("Lift Spam Block", key=f"sa_lift_spam_btn_{target_ver}"):
+            try:
+                lift_spam_block(user, target_id, lift_reason.strip())
+                st.session_state["sa_user_flash"] = f"Lifted spam block for {target['username']}."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    mod_logs = get_moderation_audit_logs(user, limit=30)
+    if mod_logs:
+        st.markdown("---")
+        st.markdown("### Spam & Moderation Audit Log")
+        st.dataframe(pd.DataFrame(mod_logs), width="stretch", hide_index=True)
 
 
 def _render_department_management(user: dict) -> None:

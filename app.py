@@ -14,6 +14,7 @@ from core.analytics_geo import get_public_transparency_by_district
 from core.auth import change_own_password, is_session_expired, login, register
 import core.database as _db
 from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
+from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from ui.shared import inject_shared_css, render_html, render_notification_center
 
 # ── Page config (must be first Streamlit call) ───────────────────────────────
@@ -107,15 +108,26 @@ def render_auth_page() -> None:
                 st.success(st.session_state.pop("signup_flash"))
 
             signup_gen = st.session_state.get("signup_gen", 0)
+            cap_on = is_captcha_enabled()
+            if cap_on and f"signup_cap_{signup_gen}" not in st.session_state:
+                st.session_state[f"signup_cap_{signup_gen}"] = generate_captcha_challenge()
+
             with st.form(f"signup_form_{signup_gen}", clear_on_submit=False):
                 new_username = st.text_input("Username (min 3 chars)", key=f"signup_username_{signup_gen}")
                 new_fullname = st.text_input("Full Name", key=f"signup_fullname_{signup_gen}")
                 new_password = st.text_input("Password (min 8 chars)", type="password", key=f"signup_password_{signup_gen}")
                 new_password2 = st.text_input("Confirm Password", type="password", key=f"signup_password2_{signup_gen}")
+                cap_input = None
+                if cap_on:
+                    q_str, _ = st.session_state[f"signup_cap_{signup_gen}"]
+                    cap_input = st.text_input(q_str, key=f"signup_cap_ans_{signup_gen}")
                 reg_submitted = st.form_submit_button("Create Account", type="primary")
 
             if reg_submitted:
-                if new_password != new_password2:
+                if cap_on and not verify_captcha_answer(st.session_state[f"signup_cap_{signup_gen}"][1], cap_input):
+                    st.error("Security arithmetic answer is incorrect. Please try again.")
+                    st.session_state[f"signup_cap_{signup_gen}"] = generate_captcha_challenge()
+                elif new_password != new_password2:
                     st.error("Passwords do not match.")
                 else:
                     try:

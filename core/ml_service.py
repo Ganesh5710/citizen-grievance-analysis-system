@@ -153,6 +153,32 @@ def resolve_review_item(
         if comp is None:
             raise ValueError("Associated complaint not found.")
 
+        if actor and actor.get("role") == "admin":
+            j_rows = conn.execute(
+                "SELECT district_id, department_id FROM admin_jurisdictions WHERE user_id = ?",
+                (actor["id"],),
+            ).fetchall()
+            if j_rows and (
+                comp["district_id"] is None
+                or not any(
+                    int(r["district_id"]) == int(comp["district_id"])
+                    and (r["department_id"] is None or int(r["department_id"]) == int(comp["department_id"]))
+                    for r in j_rows
+                )
+            ):
+                raise PermissionError("You do not have jurisdiction over this review item.")
+
+        if action in ("Confirmed Spam", "Marked Valid"):
+            from core.moderation import resolve_spam_in_conn
+
+            resolve_spam_in_conn(
+                conn,
+                actor,
+                comp["id"],
+                confirm_spam=(action == "Confirmed Spam"),
+                reason=note.strip(),
+            )
+
         new_dept_name = comp["dept_name"]
         new_dept_id = comp["department_id"]
 

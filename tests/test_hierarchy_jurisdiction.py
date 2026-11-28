@@ -53,6 +53,8 @@ def setUpModule():
         "CGS_SUPERADMIN_PASSWORD",
         "CGS_ADMIN_PASSWORD",
         "CGS_EMPLOYEE_PASSWORD",
+        "CGS_DAILY_SUBMISSION_LIMIT",
+        "CGS_SUBMISSION_COOLDOWN_SECONDS",
     ):
         _SAVED_ENV[k] = os.environ.get(k)
 
@@ -60,6 +62,8 @@ def setUpModule():
     os.environ["CGS_DB_PATH"] = os.path.join(_TMP_DIR, "test_hier.db")
     os.environ["CGS_UPLOADS_DIR"] = os.path.join(_TMP_DIR, "uploads")
     os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
+    os.environ["CGS_DAILY_SUBMISSION_LIMIT"] = "50"
+    os.environ["CGS_SUBMISSION_COOLDOWN_SECONDS"] = "0"
     os.environ.pop("CGS_SUPERADMIN_PASSWORD", None)
     os.environ.pop("CGS_ADMIN_PASSWORD", None)
     os.environ.pop("CGS_EMPLOYEE_PASSWORD", None)
