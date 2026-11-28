@@ -37,6 +37,7 @@ VALID_STATUSES = (
     "Resolved",
     "Reopened",
     "Closed",
+    "Withdrawn",
 )
 VALID_PRIORITIES = ("High", "Medium", "Low")
 
@@ -195,6 +196,9 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "cluster_support_count": int(row["cluster_support_count"] or 0),
         "report_count":         int(row["cluster_member_count"] or 1) + int(row["cluster_support_count"] or 0),
         "is_spam":              int(row["is_spam"] or 0),
+        "withdrawal_requested": bool(row["withdrawal_requested"] or 0),
+        "withdrawal_request_reason": row["withdrawal_request_reason"] or "",
+        "withdrawal_requested_at": row["withdrawal_requested_at"],
         "district_allow_self_claim": bool(row["district_allow_self_claim"] or 0),
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
@@ -253,6 +257,9 @@ SELECT c.id,
        c.priority_reason,
        c.incident_group_id,
        COALESCE(c.is_spam, 0) AS is_spam,
+       COALESCE(c.withdrawal_requested, 0) AS withdrawal_requested,
+       COALESCE(c.withdrawal_request_reason, '') AS withdrawal_request_reason,
+       c.withdrawal_requested_at,
        COALESCE(ig.member_count, 1) AS cluster_member_count,
        COALESCE(ig.support_count, (
            SELECT COUNT(*) FROM complaint_supports cs WHERE cs.complaint_id = c.id
@@ -1568,3 +1575,299 @@ def delete_complaint(user: dict | None, complaint_id: int, reason: str = "") -> 
             "UPDATE complaints SET is_deleted = 1, updated_at = ? WHERE id = ?",
             (now_str, complaint_id),
         )
+
+
+def withdraw_complaint(
+    actor: dict | None,
+    complaint_id: int,
+    reason: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """
+    Citizen withdraws their own complaint:
+      - Before assignment ('Submitted', 'Awaiting Assignment', 'Pending'): moves immediately to 'Withdrawn'.
+      - After assignment ('Assigned', 'In Progress', 'Reopened'): submits a withdrawal request for Admin review.
+    """
+    require(actor, "withdraw_complaint")
+    clean_reason = sanitize_text(reason or "", max_length=500, field_name="Withdrawal reason")
+    if len(clean_reason) < 5:
+        raise ValueError("Withdrawal reason is required (at least 5 characters).")
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+
+    with closing(_db.get_connection()) as conn, conn:
+        row = conn.execute(
+            "SELECT id, user_id, status, assigned_to, is_deleted FROM complaints WHERE id = ?",
+            (int(complaint_id),),
+        ).fetchone()
+        if row is None or row["is_deleted"]:
+            raise ValueError(f"Complaint with id {complaint_id} not found.")
+        if int(row["user_id"]) != int(actor["id"]):
+            raise PermissionError("You can only withdraw your own complaints.")
+        if row["status"] in ("Resolved", "Closed", "Withdrawn"):
+            raise ValueError(f"Cannot withdraw a complaint in '{row['status']}' status.")
+
+        old_status = row["status"]
+        if old_status in ("Submitted", "Awaiting Assignment", "Pending") and row["assigned_to"] is None:
+            conn.execute(
+                "UPDATE complaints SET status = 'Withdrawn', assigned_to = NULL, updated_at = ? WHERE id = ?",
+                (now_str, int(complaint_id)),
+            )
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'status', ?, 'Withdrawn', ?, 'Withdrawn', 'citizen_withdraw', ?, ?)
+                """,
+                (int(complaint_id), actor["id"], actor.get("username", ""), old_status, old_status, clean_reason, now_str),
+            )
+            action_mode = "withdrawn"
+        else:
+            conn.execute(
+                """
+                UPDATE complaints
+                SET withdrawal_requested = 1, withdrawal_request_reason = ?, withdrawal_requested_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (clean_reason, now_str, now_str, int(complaint_id)),
+            )
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'withdrawal_request', ?, ?, 'None', 'Requested', 'citizen_withdraw', ?, ?)
+                """,
+                (int(complaint_id), actor["id"], actor.get("username", ""), old_status, old_status, clean_reason, now_str),
+            )
+            action_mode = "requested"
+
+    detail = get_complaint_detail(actor, complaint_id, now=now_dt)
+    detail["withdrawal_action"] = action_mode
+    return detail
+
+
+def review_withdrawal_request(
+    actor: dict | None,
+    complaint_id: int,
+    approve: bool,
+    reason: str = "",
+) -> dict:
+    """Admin (in jurisdiction) or Super Admin approves or rejects a post-assignment withdrawal request."""
+    require(actor, "transfer_complaint")
+    clean_reason = sanitize_text(reason or "", max_length=500, field_name="Review reason")
+    now_str = _fmt_dt(_utc_now())
+
+    with closing(_db.get_connection()) as conn, conn:
+        row = conn.execute(
+            "SELECT id, district_id, department_id, status, withdrawal_requested, is_deleted FROM complaints WHERE id = ?",
+            (int(complaint_id),),
+        ).fetchone()
+        if row is None or row["is_deleted"]:
+            raise ValueError(f"Complaint {complaint_id} not found.")
+        _assert_admin_jurisdiction(conn, actor, row["district_id"], row["department_id"])
+        if not row["withdrawal_requested"]:
+            raise ValueError("No pending withdrawal request on this complaint.")
+
+        old_status = row["status"]
+        if approve:
+            conn.execute(
+                """
+                UPDATE complaints
+                SET status = 'Withdrawn', assigned_to = NULL, withdrawal_requested = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (now_str, int(complaint_id)),
+            )
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'status', ?, 'Withdrawn', ?, 'Withdrawn', 'staff_update', ?, ?)
+                """,
+                (
+                    int(complaint_id),
+                    actor["id"],
+                    actor.get("username", ""),
+                    old_status,
+                    old_status,
+                    clean_reason or "Withdrawal request approved by Admin",
+                    now_str,
+                ),
+            )
+        else:
+            conn.execute(
+                "UPDATE complaints SET withdrawal_requested = 0, updated_at = ? WHERE id = ?",
+                (now_str, int(complaint_id)),
+            )
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'withdrawal_request', ?, ?, 'Requested', 'Rejected', 'staff_update', ?, ?)
+                """,
+                (
+                    int(complaint_id),
+                    actor["id"],
+                    actor.get("username", ""),
+                    old_status,
+                    old_status,
+                    clean_reason or "Withdrawal request rejected by Admin",
+                    now_str,
+                ),
+            )
+
+    from notifications.service import emit_complaint_event
+    emit_complaint_event(
+        "status_changed",
+        complaint_id,
+        status_label="Withdrawn" if approve else old_status,
+        detail_note="Withdrawal approved" if approve else "Withdrawal request rejected",
+    )
+    return get_complaint_detail(actor, complaint_id)
+
+
+def transfer_complaint(
+    actor: dict | None,
+    complaint_id: int,
+    target_department_id: int,
+    reason: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """
+    Admin (in jurisdiction) or Super Admin transfers a complaint to another department
+    with a mandatory reason: resets assignment, recalculates SLA due_at, preserves audit history,
+    and notifies the citizen.
+    """
+    require(actor, "transfer_complaint")
+    clean_reason = sanitize_text(reason or "", max_length=500, field_name="Transfer reason")
+    if len(clean_reason) < 5:
+        raise ValueError("Transfer reason is required (at least 5 characters).")
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+
+    with closing(_db.get_connection()) as conn, conn:
+        row = conn.execute(
+            """
+            SELECT c.id, c.department_id, d.name AS old_dept_name, c.district_id,
+                   c.priority, c.status, c.assigned_to, u.username AS old_emp, c.is_deleted
+            FROM complaints c
+            JOIN departments d ON d.id = c.department_id
+            LEFT JOIN users u ON u.id = c.assigned_to
+            WHERE c.id = ?
+            """,
+            (int(complaint_id),),
+        ).fetchone()
+        if row is None or row["is_deleted"]:
+            raise ValueError(f"Complaint {complaint_id} not found.")
+        _assert_admin_jurisdiction(conn, actor, row["district_id"], row["department_id"])
+
+        target_dept = conn.execute(
+            "SELECT id, name, is_active FROM departments WHERE id = ?",
+            (int(target_department_id),),
+        ).fetchone()
+        if target_dept is None or not target_dept["is_active"]:
+            raise ValueError("Target department does not exist or is inactive.")
+        if int(target_dept["id"]) == int(row["department_id"]):
+            raise ValueError("Select a different department for transfer.")
+
+        new_due = compute_due_at(conn, int(target_department_id), row["priority"], now_dt)
+        old_status = row["status"]
+        new_status = "Awaiting Assignment"
+
+        conn.execute(
+            """
+            UPDATE complaints
+            SET department_id = ?, assigned_to = NULL, assigned_by = NULL, assigned_at = NULL,
+                accepted_at = NULL, status = ?, due_at = ?, escalation_level = 0, updated_at = ?
+            WHERE id = ?
+            """,
+            (int(target_department_id), new_status, new_due, now_str, int(complaint_id)),
+        )
+        conn.execute(
+            """
+            INSERT INTO complaint_updates
+                (complaint_id, employee_id, actor_label, field_name,
+                 old_status, new_status, old_value, new_value, source, remark, created_at)
+            VALUES (?, ?, ?, 'department', ?, ?, ?, ?, 'staff_transfer', ?, ?)
+            """,
+            (
+                int(complaint_id),
+                actor["id"],
+                actor.get("username", ""),
+                old_status,
+                new_status,
+                row["old_dept_name"],
+                target_dept["name"],
+                f"Transferred department: {clean_reason}",
+                now_str,
+            ),
+        )
+        if row["assigned_to"] is not None:
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'assigned_to', ?, ?, ?, 'Unassigned', 'staff_transfer', ?, ?)
+                """,
+                (
+                    int(complaint_id),
+                    actor["id"],
+                    actor.get("username", ""),
+                    old_status,
+                    new_status,
+                    row["old_emp"] or "Assigned",
+                    f"Reset assignment due to department transfer to {target_dept['name']}",
+                    now_str,
+                ),
+            )
+
+    from notifications.service import emit_complaint_event
+    emit_complaint_event("complaint_transferred", complaint_id, status_label=new_status)
+    return get_complaint_detail(actor, complaint_id, now=now_dt)
+
+
+def add_internal_note(actor: dict | None, complaint_id: int, note: str) -> dict:
+    """
+    Add a confidential internal staff note visible ONLY to assigned employee,
+    jurisdiction admin, and super_admin — never exposed to citizens.
+    """
+    require(actor, "add_internal_note")
+    clean_note = sanitize_text(note or "", max_length=1000, field_name="Internal note")
+    if len(clean_note) < 2:
+        raise ValueError("Internal note must be at least 2 characters.")
+
+    # Enforce view scope (assigned employee, jurisdiction admin, or super_admin)
+    get_complaint_detail(actor, int(complaint_id))
+    now_str = _fmt_dt(_utc_now())
+
+    with closing(_db.get_connection()) as conn, conn:
+        cur = conn.execute(
+            """
+            INSERT INTO complaint_notes (complaint_id, author_id, author_username, author_role, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (int(complaint_id), actor["id"], actor.get("username", ""), actor.get("role", ""), clean_note, now_str),
+        )
+        row = conn.execute("SELECT * FROM complaint_notes WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def get_internal_notes(actor: dict | None, complaint_id: int) -> list[dict]:
+    """Fetch internal staff notes; citizens ('user') always raise PermissionError."""
+    require(actor, "add_internal_note")
+    get_complaint_detail(actor, int(complaint_id))
+    with closing(_db.get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM complaint_notes WHERE complaint_id = ? ORDER BY created_at ASC, id ASC",
+            (int(complaint_id),),
+        ).fetchall()
+    return [dict(r) for r in rows]

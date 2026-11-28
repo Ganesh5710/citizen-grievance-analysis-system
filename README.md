@@ -91,6 +91,8 @@ citizen_grievance_project/
 | `submit_feedback` | Yes | No | No | No | Own Resolved complaint only, within 7 days, once per cycle |
 | `view_all` | No | Yes | Yes | Yes | Employee sees own department only; Admin/Super Admin see all |
 | `assign_task` / `assign_complaint` | No | No | Yes | Yes | Assign/reassign with due date & instructions to matching dept + jurisdiction employee |
+| `transfer_complaint` | No | No | Yes | Yes | Transfer complaint between departments (mandatory reason, resets SLA/assignment) & review post-assignment withdrawals |
+| `add_internal_note` | No | Yes | Yes | Yes | Confidential staff-only notes hidden from citizens |
 | `merge_complaints` | No | No | Yes | Yes | Merge/unmerge duplicate complaints into incident clusters within own jurisdiction (reason required, audit logged) |
 | `accept_task` | No | Yes | No | No | Employee explicitly accepts an assigned task and logs acceptance |
 | `update_task_status` / `update_status_remark` | No | Yes | Yes | Yes | Employee only on tasks assigned to them; Admin status override requires mandatory reason |
@@ -110,6 +112,8 @@ citizen_grievance_project/
 | `resolve_review_item` | No | No | Yes | Yes | Accept ML/citizen department and record priority feedback |
 | `view_analytics` | No | Yes (own scope) | Yes | Yes | View complaint analytics, location filters, and hotspot maps |
 | `support_complaint` | Yes | No | No | No | Citizens can support open local issues |
+| `withdraw_complaint` | Yes | No | No | No | Citizens can withdraw pre-assignment or request withdrawal post-assignment |
+| `export_own_data` | Yes | Yes | Yes | Yes | Export personal data (JSON/CSV) & citizen account anonymization (DPDP 2023) |
 | `view_public_dashboard` | Public | Public | Public | Public | Anonymized district transparency metrics (suppresses `< 5` groups, zero PII) |
 
 > All permissions and scopes are enforced in the service layer (`core/`), not only in the UI.

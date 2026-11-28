@@ -18,7 +18,9 @@ from core.complaints import (
     get_complaints,
     submit_complaint,
     submit_feedback,
+    withdraw_complaint,
 )
+from core.privacy import anonymize_own_account, export_own_data, get_privacy_notice_markdown
 from core.departments import get_active_departments
 from core.images import MAX_IMAGES_PER_COMPLAINT, add_images
 from core.locations import (
@@ -581,7 +583,7 @@ def render_citizen_page(user: dict) -> None:
         """
     )
 
-    tab_submit, tab_my = st.tabs(["Submit Complaint", "My Complaints"])
+    tab_submit, tab_my, tab_privacy = st.tabs(["Submit Complaint", "My Complaints", "Privacy & Data Export"])
 
     with tab_submit:
         if "citizen_last_ticket" in st.session_state:
@@ -691,6 +693,79 @@ def render_citizen_page(user: dict) -> None:
                                 except (PermissionError, ValueError) as exc:
                                     st.error(str(exc))
 
+                if detail.get("status") not in ("Resolved", "Closed", "Withdrawn"):
+                    if detail.get("withdrawal_requested"):
+                        st.warning(
+                            f"Withdrawal requested: {detail.get('withdrawal_request_reason', '')} (Pending Admin review)."
+                        )
+                    else:
+                        w_label = (
+                            "Withdraw Complaint"
+                            if detail.get("status") in ("Submitted", "Awaiting Assignment", "Pending") and detail.get("assigned_to") is None
+                            else "Request Complaint Withdrawal (Requires Admin Approval)"
+                        )
+                        with st.expander(w_label):
+                            w_reason = st.text_input(
+                                "Reason for withdrawal (required, min 5 chars)",
+                                key=f"citizen_withdraw_reason_{detail['id']}",
+                            )
+                            if st.button(w_label, key=f"citizen_withdraw_btn_{detail['id']}"):
+                                try:
+                                    res_w = withdraw_complaint(user, detail["id"], w_reason.strip())
+                                    st.session_state["citizen_my_flash"] = (
+                                        "Complaint withdrawn."
+                                        if res_w.get("withdrawal_action") == "withdrawn"
+                                        else "Withdrawal request submitted to Admin."
+                                    )
+                                    st.rerun()
+                                except (PermissionError, ValueError) as exc:
+                                    st.error(str(exc))
+
                 _render_citizen_feedback_section(user, detail)
                 st.markdown("#### Status History and Remarks")
                 render_history(detail["id"], user)
+
+    with tab_privacy:
+        st.markdown("### My Privacy & DPDP Act 2023 Tools")
+        st.markdown(get_privacy_notice_markdown())
+        st.markdown("---")
+        st.markdown("#### Export My Personal Data")
+        col_ex1, col_ex2 = st.columns(2)
+        with col_ex1:
+            json_pkg = export_own_data(user, "json")
+            st.download_button(
+                "Download My Data (JSON)",
+                data=json_pkg["content"],
+                file_name=json_pkg["filename"],
+                mime="application/json",
+                key=f"cit_export_json_{user['id']}",
+            )
+        with col_ex2:
+            csv_pkg = export_own_data(user, "csv")
+            st.download_button(
+                "Download My Data (CSV)",
+                data=csv_pkg["content"],
+                file_name=csv_pkg["filename"],
+                mime="text/csv",
+                key=f"cit_export_csv_{user['id']}",
+            )
+
+        st.markdown("---")
+        with st.expander("Delete / Anonymize My Account"):
+            st.warning(
+                "This permanently anonymizes your username, full name, phone, and email while retaining "
+                "de-identified civic complaint statistics and audit records as required for governance."
+            )
+            del_reason = st.text_input("Reason (optional)", key=f"cit_anon_reason_{user['id']}")
+            del_confirm = st.checkbox("I understand this action is permanent", key=f"cit_anon_confirm_{user['id']}")
+            if st.button("Anonymize & Delete My Account", key=f"cit_anon_btn_{user['id']}"):
+                if not del_confirm:
+                    st.error("Confirm the checkbox before proceeding.")
+                else:
+                    try:
+                        anonymize_own_account(user, del_reason.strip())
+                        st.session_state.clear()
+                        st.success("Your account has been anonymized and deactivated.")
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))

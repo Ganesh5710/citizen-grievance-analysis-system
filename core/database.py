@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS users (
     in_app_notifications  INTEGER NOT NULL DEFAULT 1,
     confirmed_spam_count  INTEGER NOT NULL DEFAULT 0,
     spam_blocked_until    TEXT,
+    anonymized_at         TEXT,
     created_at            TEXT DEFAULT (datetime('now'))
 );
 
@@ -209,7 +210,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     longitude        REAL,
     priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
     status           TEXT NOT NULL DEFAULT 'Pending'
-                         CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
+                         CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed','Withdrawn')),
     assigned_to      INTEGER REFERENCES users(id),
     assigned_by      INTEGER REFERENCES users(id),
     assigned_at      TEXT,
@@ -233,6 +234,9 @@ CREATE TABLE IF NOT EXISTS complaints (
     is_recurring            INTEGER NOT NULL DEFAULT 0,
     priority_reason         TEXT DEFAULT '',
     incident_group_id       INTEGER REFERENCES incident_groups(id),
+    withdrawal_requested    INTEGER NOT NULL DEFAULT 0,
+    withdrawal_request_reason TEXT DEFAULT '',
+    withdrawal_requested_at TEXT,
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -388,6 +392,33 @@ CREATE TABLE IF NOT EXISTS moderation_audit_log (
     reason          TEXT DEFAULT '',
     created_at      TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS complaint_notes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    complaint_id    INTEGER NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    author_id       INTEGER NOT NULL REFERENCES users(id),
+    author_username TEXT NOT NULL DEFAULT '',
+    author_role     TEXT NOT NULL DEFAULT '',
+    note            TEXT NOT NULL,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_codes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email      TEXT NOT NULL,
+    code_hash  TEXT NOT NULL,
+    code_salt  TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_rate_limits (
+    identifier    TEXT PRIMARY KEY,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    window_start  TEXT NOT NULL
+);
 """
 
 _DEFAULT_DEPARTMENTS = [
@@ -520,6 +551,7 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         ("in_app_notifications",  "INTEGER NOT NULL DEFAULT 1"),
         ("confirmed_spam_count",  "INTEGER NOT NULL DEFAULT 0"),
         ("spam_blocked_until",    "TEXT"),
+        ("anonymized_at",         "TEXT"),
     ]
     for col_name, col_def in add_cols:
         if col_name not in cols:
@@ -635,6 +667,7 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
         or "'Closed'" not in ddl
         or "'Awaiting Assignment'" not in ddl
         or "'Submitted'" not in ddl
+        or "'Withdrawn'" not in ddl
     )
     if not needs_rebuild:
         return
@@ -667,7 +700,7 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
             longitude        REAL,
             priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
             status           TEXT NOT NULL DEFAULT 'Pending'
-                                 CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
+                                 CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed','Withdrawn')),
             assigned_to      INTEGER REFERENCES users(id),
             assigned_by      INTEGER REFERENCES users(id),
             assigned_at      TEXT,
@@ -841,6 +874,9 @@ def init_db() -> None:
                 ("incident_group_id", "INTEGER REFERENCES incident_groups(id)"),
                 ("is_spam", "INTEGER NOT NULL DEFAULT 0"),
                 ("is_demo_spike", "INTEGER NOT NULL DEFAULT 0"),
+                ("withdrawal_requested", "INTEGER NOT NULL DEFAULT 0"),
+                ("withdrawal_request_reason", "TEXT DEFAULT ''"),
+                ("withdrawal_requested_at", "TEXT"),
             ):
                 if col_name not in c_cols:
                     conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")

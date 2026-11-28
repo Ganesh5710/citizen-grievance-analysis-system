@@ -944,8 +944,179 @@ def get_all_users(actor: dict | None) -> list[dict]:
             "preferred_language":   row["preferred_language"],
             "phone":                row["phone"],
             "email":                row["email"],
+            "email_verified":       bool(row["email_verified"]),
             "email_notifications":  bool(row["email_notifications"]),
+            "in_app_notifications": bool(row["in_app_notifications"]),
+            "confirmed_spam_count": int(row["confirmed_spam_count"] or 0),
+            "spam_blocked_until":   row["spam_blocked_until"],
             "created_at":           row["created_at"],
         }
         for row in rows
     ]
+
+
+def request_password_reset(
+    identifier_or_email: str,
+    *,
+    now: datetime | None = None,
+    smtp_sender=None,
+) -> str:
+    """
+    Request a 15-minute single-use password reset code for a citizen account (hashed in DB,
+    rate-limited per identifier). Always returns the SAME generic confirmation message
+    regardless of whether the account exists or not.
+    """
+    import secrets
+    from core.config import get_env_int
+
+    clean_id = sanitize_text(identifier_or_email or "", max_length=120, field_name="Account identifier").strip()
+    generic_msg = (
+        "If an active citizen account matching that username or verified email exists, "
+        "a one-time password reset code (valid for 15 minutes) has been sent."
+    )
+    if not clean_id:
+        raise ValueError("Please enter your username or email address.")
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+    limit_per_hr = get_env_int("CGS_RESET_RATE_LIMIT_PER_HOUR", 5)
+    ttl_mins = get_env_int("CGS_RESET_CODE_TTL_MINUTES", 15)
+    key = clean_id.lower()
+
+    with closing(get_connection()) as conn, conn:
+        rl = conn.execute(
+            "SELECT attempt_count, window_start FROM password_reset_rate_limits WHERE identifier = ?",
+            (key,),
+        ).fetchone()
+        if rl:
+            win_dt = _parse_dt(rl["window_start"]) or now_dt
+            if (now_dt - win_dt).total_seconds() < 3600:
+                if int(rl["attempt_count"]) >= limit_per_hr:
+                    raise ValueError("Too many password reset requests. Please try again in an hour.")
+                conn.execute(
+                    "UPDATE password_reset_rate_limits SET attempt_count = attempt_count + 1 WHERE identifier = ?",
+                    (key,),
+                )
+            else:
+                conn.execute(
+                    "UPDATE password_reset_rate_limits SET attempt_count = 1, window_start = ? WHERE identifier = ?",
+                    (now_str, key),
+                )
+        else:
+            conn.execute(
+                "INSERT INTO password_reset_rate_limits (identifier, attempt_count, window_start) VALUES (?, 1, ?)",
+                (key, now_str),
+            )
+
+        user_row = conn.execute(
+            """
+            SELECT id, username, role, email, email_verified, is_active
+            FROM users
+            WHERE is_active = 1
+              AND (lower(username) = ? OR (email != '' AND lower(email) = ?))
+            ORDER BY id ASC LIMIT 1
+            """,
+            (key, key),
+        ).fetchone()
+
+        if user_row is not None and user_row["email"]:
+            code = f"{secrets.randbelow(900000) + 100000:06d}"
+            c_hash, c_salt = hash_password(code)
+            exp_str = _fmt_dt(now_dt + timedelta(minutes=ttl_mins))
+            # Invalidate prior unused codes for cleanliness
+            conn.execute(
+                "UPDATE password_reset_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+                (now_str, user_row["id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO password_reset_codes (user_id, email, code_hash, code_salt, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_row["id"], user_row["email"], c_hash, c_salt, exp_str, now_str),
+            )
+        else:
+            code = ""
+            user_row = None
+
+    if user_row is not None and code:
+        try:
+            from notifications.service import _send_via_smtp
+            sender = smtp_sender or _send_via_smtp
+            sender(
+                user_row["email"],
+                "Password Reset Code - Citizen Grievance Portal",
+                f"Your one-time password reset code is: {code}\n"
+                f"This code expires in {ttl_mins} minutes and can only be used once.",
+            )
+        except Exception:
+            pass
+
+    return generic_msg
+
+
+def confirm_password_reset(
+    identifier_or_email: str,
+    code: str,
+    new_password: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Validate single-use unexpired OTP reset code and update the user's password."""
+    clean_id = sanitize_text(identifier_or_email or "", max_length=120, field_name="Account identifier").strip().lower()
+    clean_code = sanitize_text(code or "", max_length=20, field_name="Reset code").strip()
+    if len(new_password or "") < 8:
+        raise ValueError("New password must be at least 8 characters long.")
+    if not clean_id or not clean_code:
+        raise ValueError("Account identifier and reset code are required.")
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+
+    with closing(get_connection()) as conn, conn:
+        user_row = conn.execute(
+            """
+            SELECT id, username FROM users
+            WHERE is_active = 1
+              AND (lower(username) = ? OR (email != '' AND lower(email) = ?))
+            ORDER BY id ASC LIMIT 1
+            """,
+            (clean_id, clean_id),
+        ).fetchone()
+        if user_row is None:
+            raise ValueError("Invalid or expired password reset code.")
+
+        codes = conn.execute(
+            """
+            SELECT id, code_hash, code_salt, expires_at
+            FROM password_reset_codes
+            WHERE user_id = ? AND used_at IS NULL
+            ORDER BY id DESC LIMIT 5
+            """,
+            (user_row["id"],),
+        ).fetchall()
+
+        matched_id = None
+        for cr in codes:
+            exp_dt = _parse_dt(cr["expires_at"])
+            if exp_dt is None or now_dt > exp_dt:
+                continue
+            if verify_password(clean_code, cr["code_hash"], cr["code_salt"]):
+                matched_id = cr["id"]
+                break
+
+        if matched_id is None:
+            raise ValueError("Invalid or expired password reset code.")
+
+        pw_hash, pw_salt = hash_password(new_password)
+        conn.execute(
+            "UPDATE password_reset_codes SET used_at = ? WHERE id = ?",
+            (now_str, matched_id),
+        )
+        conn.execute(
+            "UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?",
+            (pw_hash, pw_salt, user_row["id"]),
+        )
+        _clear_failed_attempts(conn, user_row["username"])
+        updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (user_row["id"],)).fetchone()
+    return _row_to_user(updated)

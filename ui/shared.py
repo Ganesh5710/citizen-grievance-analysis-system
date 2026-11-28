@@ -17,6 +17,7 @@ from core.complaints import (
     VALID_PRIORITIES,
     VALID_STATUSES,
     accept_task,
+    add_internal_note,
     assign_task,
     claim_complaint,
     delete_complaint,
@@ -24,7 +25,10 @@ from core.complaints import (
     get_complaint_history,
     get_complaints,
     get_department_employees,
+    get_internal_notes,
     get_suggested_employee,
+    review_withdrawal_request,
+    transfer_complaint,
     update_complaint,
 )
 from core.departments import get_active_departments, get_all_departments
@@ -47,6 +51,7 @@ _STATUS_BADGE_CLASSES = {
     "In Progress":         "cgs-badge-warning",
     "Resolved":            "cgs-badge-success",
     "Reopened":            "cgs-badge-danger",
+    "Withdrawn":           "cgs-badge-neutral",
     "Closed":              "cgs-badge-neutral",
 }
 
@@ -782,6 +787,86 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                         st.rerun()
                     except (PermissionError, ValueError) as exc:
                         st.error(str(exc))
+
+    # Transfer Department & Withdrawal Request Review (Admin / Super Admin)
+    if can(user, "transfer_complaint"):
+        if detail.get("withdrawal_requested"):
+            st.markdown("---")
+            with st.expander(f"Withdrawal Request Pending — #{detail['incident_id']}", expanded=True):
+                st.write(f"**Citizen Reason:** {detail.get('withdrawal_request_reason') or 'Not specified'}")
+                w_rev_note = st.text_input(
+                    "Decision note (optional)",
+                    key=f"{key_prefix}_w_rev_note_{detail['id']}_{detail['updated_at']}",
+                )
+                wc1, wc2 = st.columns(2)
+                if wc1.button("Approve Withdrawal", key=f"{key_prefix}_w_app_{detail['id']}_{detail['updated_at']}"):
+                    try:
+                        review_withdrawal_request(user, detail["id"], True, w_rev_note.strip())
+                        st.session_state[flash_key] = f"Complaint #{detail['incident_id']} marked Withdrawn."
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))
+                if wc2.button("Reject Withdrawal", key=f"{key_prefix}_w_rej_{detail['id']}_{detail['updated_at']}"):
+                    try:
+                        review_withdrawal_request(user, detail["id"], False, w_rev_note.strip())
+                        st.session_state[flash_key] = "Withdrawal request rejected."
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))
+
+        if detail["status"] not in ("Resolved", "Closed", "Withdrawn"):
+            st.markdown("---")
+            with st.expander(f"Transfer Department — #{detail['incident_id']}"):
+                other_depts = [d for d in get_active_departments() if int(d["id"]) != int(detail["department_id"])]
+                if other_depts:
+                    t_dept_names = [d["name"] for d in other_depts]
+                    t_dept_choice = st.selectbox(
+                        "Target Department",
+                        options=t_dept_names,
+                        key=f"{key_prefix}_t_dept_{detail['id']}_{detail['updated_at']}",
+                    )
+                    t_reason = st.text_input(
+                        "Transfer Reason (mandatory, min 5 chars)",
+                        key=f"{key_prefix}_t_reason_{detail['id']}_{detail['updated_at']}",
+                        placeholder="e.g. Issue pertains to municipal drainage rather than water supply",
+                    )
+                    if st.button("Transfer Complaint", key=f"{key_prefix}_t_btn_{detail['id']}_{detail['updated_at']}"):
+                        target_obj = next(d for d in other_depts if d["name"] == t_dept_choice)
+                        try:
+                            transfer_complaint(user, detail["id"], target_obj["id"], t_reason.strip())
+                            st.session_state[flash_key] = (
+                                f"Transferred #{detail['incident_id']} to {target_obj['name']} and notified citizen."
+                            )
+                            st.rerun()
+                        except (PermissionError, ValueError) as exc:
+                            st.error(str(exc))
+                else:
+                    st.caption("No other active departments available for transfer.")
+
+    # Internal Staff Notes (Never exposed to citizens)
+    if can(user, "add_internal_note"):
+        st.markdown("---")
+        with st.expander(f"Internal Staff Notes (Hidden from Citizens) — #{detail['incident_id']}"):
+            notes = get_internal_notes(user, detail["id"])
+            if notes:
+                for n in notes:
+                    st.markdown(
+                        f"**{n['author_username']}** (`{n['author_role']}` · {n['created_at']}): {n['note']}"
+                    )
+            else:
+                st.caption("No internal staff notes recorded yet.")
+            new_note = st.text_area(
+                "Add Internal Note (staff only)",
+                key=f"{key_prefix}_internal_note_{detail['id']}_{len(notes)}_{detail['updated_at']}",
+                height=70,
+            )
+            if st.button("Save Internal Note", key=f"{key_prefix}_internal_note_btn_{detail['id']}_{detail['updated_at']}"):
+                try:
+                    add_internal_note(user, detail["id"], new_note.strip())
+                    st.session_state[flash_key] = "Internal staff note saved."
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
 
     # Soft delete (Super Admin only)
     if can(user, "delete_complaint"):

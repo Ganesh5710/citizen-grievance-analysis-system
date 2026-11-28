@@ -11,10 +11,18 @@ import pandas as pd
 import streamlit as st
 
 from core.analytics_geo import get_public_transparency_by_district
-from core.auth import change_own_password, is_session_expired, login, register
+from core.auth import (
+    change_own_password,
+    confirm_password_reset,
+    is_session_expired,
+    login,
+    register,
+    request_password_reset,
+)
 import core.database as _db
 from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
 from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
+from core.privacy import get_privacy_notice_markdown
 from ui.shared import inject_shared_css, render_html, render_notification_center
 
 # ── Page config (must be first Streamlit call) ───────────────────────────────
@@ -78,7 +86,7 @@ def render_auth_page() -> None:
 
         _show_default_password_warning()
 
-        tab_login, tab_signup, tab_public = st.tabs(["Login", "Sign Up", "Public Transparency"])
+        tab_login, tab_signup, tab_public, tab_privacy = st.tabs(["Login", "Sign Up", "Public Transparency", "Privacy Notice"])
 
         with tab_login:
             with st.form("login_form"):
@@ -101,6 +109,30 @@ def render_auth_page() -> None:
                         st.error(
                             "Invalid credentials, account is deactivated, or login is temporarily locked."
                         )
+
+            with st.expander("Forgot Password? (One-Time Email Reset Code)"):
+                with st.form("req_reset_form"):
+                    r_id = st.text_input("Username or Registered Email", key="reset_req_id")
+                    if st.form_submit_button("Send 15-Min Reset Code"):
+                        try:
+                            msg = request_password_reset(r_id.strip())
+                            st.info(msg)
+                        except ValueError as exc:
+                            st.error(str(exc))
+                with st.form("confirm_reset_form"):
+                    c_id = st.text_input("Username or Email", key="reset_conf_id")
+                    c_code = st.text_input("6-Digit One-Time Code", key="reset_conf_code")
+                    c_pw = st.text_input("New Password (min 8 chars)", type="password", key="reset_conf_pw")
+                    c_pw2 = st.text_input("Confirm New Password", type="password", key="reset_conf_pw2")
+                    if st.form_submit_button("Reset Password"):
+                        if c_pw != c_pw2:
+                            st.error("New passwords do not match.")
+                        else:
+                            try:
+                                confirm_password_reset(c_id.strip(), c_code.strip(), c_pw)
+                                st.success("Password reset successfully. You can log in above.")
+                            except ValueError as exc:
+                                st.error(str(exc))
 
         with tab_signup:
             st.info("Public sign-up creates a Citizen account only.")
@@ -176,6 +208,9 @@ def render_auth_page() -> None:
                 )
             else:
                 st.info("No district currently meets the minimum aggregation threshold of 5 complaints.")
+
+        with tab_privacy:
+            st.markdown(get_privacy_notice_markdown())
 
 
 def render_forced_password_change(user: dict) -> None:
