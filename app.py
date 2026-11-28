@@ -21,7 +21,7 @@ from core.auth import (
 )
 import core.database as _db
 from core.health import get_health_status
-from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
+from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_all_default_locations
 from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from core.privacy import get_privacy_notice_markdown
 from core.public_status import lookup_public_status
@@ -38,13 +38,13 @@ inject_shared_css()
 
 
 def _ensure_locations_bootstrapped() -> None:
-    """Auto-load official AP India Post pincodes once on empty locations table."""
+    """Auto-load official AP India Post pincodes & optional LGD villages once on empty DB."""
     if st.session_state.get("_locations_checked"):
         return
     try:
         stats = get_location_stats()
         if stats["states"] == 0 and DEFAULT_LOCATION_CSV.exists():
-            load_locations_from_csv(DEFAULT_LOCATION_CSV)
+            load_all_default_locations()
     except Exception:
         pass
     st.session_state["_locations_checked"] = True

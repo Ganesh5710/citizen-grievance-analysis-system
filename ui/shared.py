@@ -30,10 +30,18 @@ from core.complaints import (
     review_withdrawal_request,
     transfer_complaint,
     update_complaint,
+    update_complaint_location,
 )
 from core.departments import get_active_departments, get_all_departments
 from core.images import get_images, remove_image
-from core.locations import get_districts, get_mandals
+from core.locations import (
+    get_areas,
+    get_countries,
+    get_districts,
+    get_mandals,
+    get_states,
+    get_towns_villages,
+)
 from core.ml_service import get_review_queue, resolve_review_item
 from core.performance import get_employee_own_performance, get_performance_metrics
 from core.permissions import can
@@ -44,6 +52,7 @@ from core.reports import (
     export_complaints_xlsx,
 )
 from core.sla import acknowledge_escalation, run_escalation_check
+from geo.digipin import encode_digipin
 from ml.classifier import explain_with_lime, has_emergency_keyword
 
 STATUS_OPTIONS = list(VALID_STATUSES)
@@ -251,7 +260,6 @@ def render_complaint_card(detail: dict) -> None:
     if not detail.get("department_is_active", True):
         dept_name = f"{dept_name} (Inactive)"
     dept_esc = html.escape(dept_name or "Unknown")
-    loc_esc = html.escape(str(detail.get("location") or "Not specified"))
     assigned_esc = html.escape(str(detail.get("assigned_username") or "Unassigned"))
     due_esc = html.escape(str(detail.get("due_at") or "Not set"))
     created_esc = html.escape(str(detail.get("created_at", "")))
@@ -290,8 +298,26 @@ def render_complaint_card(detail: dict) -> None:
     area_name = detail.get("area_name") or ""
     pincode_val = detail.get("pincode") or ""
     mandal_name = detail.get("mandal_name") or ""
-    geo_bits = [x for x in (dist_name, mandal_name, area_name, f"PIN {pincode_val}" if pincode_val else "") if x]
+    tv_name = detail.get("town_village_name") or ""
+    state_name = detail.get("state_name") or ""
+    country_name = detail.get("country_name") or ""
+    geo_bits = [x for x in (country_name, state_name, dist_name, mandal_name, tv_name, area_name, f"PIN {pincode_val}" if pincode_val else "") if x]
     geo_line = f"<p><b>Jurisdiction:</b> {html.escape(' | '.join(geo_bits))}</p>" if geo_bits else ""
+
+    fmt_addr = html.escape(str(detail.get("formatted_address") or detail.get("location") or "Not specified"))
+    struct_parts = []
+    if detail.get("house_no"):
+        struct_parts.append(f"<b>House/Flat:</b> {html.escape(str(detail['house_no']))}")
+    if detail.get("street"):
+        struct_parts.append(f"<b>Street/Road:</b> {html.escape(str(detail['street']))}")
+    if detail.get("landmark"):
+        struct_parts.append(f"<b>Landmark:</b> {html.escape(str(detail['landmark']))}")
+    if detail.get("digipin"):
+        dp_lbl = html.escape(str(detail["digipin"]))
+        if detail.get("digipin_flagged"):
+            dp_lbl += ' <span class="cgs-badge cgs-badge-danger">DIGIPIN Flagged</span>'
+        struct_parts.append(f"<b>DIGIPIN:</b> {dp_lbl}")
+    struct_line = f"<p>{' &nbsp;|&nbsp; '.join(struct_parts)}</p>" if struct_parts else ""
     instr_val = detail.get("assignment_instructions") or ""
     instr_line = f"<p><b>Assignment Instructions:</b> {html.escape(instr_val)}</p>" if instr_val else ""
     assigned_by_esc = html.escape(str(detail.get("assigned_by_username") or ""))
@@ -327,7 +353,8 @@ def render_complaint_card(detail: dict) -> None:
             </div>
             <p><b>Department:</b> {dept_esc} &nbsp;|&nbsp; <b>Assigned To:</b> {assigned_esc}</p>
             {assign_meta}
-            <p><b>Location:</b> {loc_esc}</p>
+            <p><b>Formatted Address:</b> {fmt_addr}</p>
+            {struct_line}
             {geo_line}
             {instr_line}
             <p><b>Due At (UTC):</b> {due_esc} &nbsp;|&nbsp; <b>Photos:</b> {int(detail.get("photo_count", 0))}</p>
@@ -874,6 +901,96 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                 except (PermissionError, ValueError) as exc:
                     st.error(str(exc))
 
+    # Correct Wrongly Chosen District / Area (Admin & Super Admin)
+    if can(user, "edit_complaint_fields") and detail["status"] not in ("Resolved", "Closed", "Withdrawn"):
+        st.markdown("---")
+        with st.expander(f"Correct Address / Jurisdiction — #{detail['incident_id']}"):
+            st.caption(
+                "Correcting the district automatically re-routes the complaint to the new district Admin and resets assignment."
+            )
+            fix_ver = f"{detail['id']}_{detail['updated_at']}"
+            all_st_rows = get_states(active_only=True)
+            if all_st_rows:
+                st_opts = [s["id"] for s in all_st_rows]
+                st_lbls = {s["id"]: s["name"] for s in all_st_rows}
+                cur_sid = detail.get("state_id") if detail.get("state_id") in st_opts else st_opts[0]
+                fix_sid = st.selectbox(
+                    "Corrected State",
+                    options=st_opts,
+                    index=st_opts.index(cur_sid),
+                    format_func=lambda x: st_lbls[x],
+                    key=f"{key_prefix}_fix_st_{fix_ver}",
+                )
+            else:
+                fix_sid = detail.get("state_id")
+            fix_dists = get_districts(fix_sid, active_only=True)
+            fix_did = None
+            if fix_dists:
+                fd_opts = [d["id"] for d in fix_dists]
+                fd_lbls = {d["id"]: d["name"] for d in fix_dists}
+                cur_did = detail.get("district_id") if detail.get("district_id") in fd_opts else fd_opts[0]
+                fix_did = st.selectbox(
+                    "Corrected District",
+                    options=fd_opts,
+                    index=fd_opts.index(cur_did),
+                    format_func=lambda x: fd_lbls[x],
+                    key=f"{key_prefix}_fix_dist_{fix_ver}_{fix_sid}",
+                )
+            fix_areas = get_areas(fix_did, active_only=True) if fix_did is not None else []
+            fix_aid = None
+            if fix_areas:
+                fa_opts = [None, *[a["id"] for a in fix_areas]]
+                fa_lbls = {None: "-- Keep District Only --", **{a["id"]: f"{a['name']} ({a.get('pincode') or ''})" for a in fix_areas}}
+                cur_aid = detail.get("area_id") if detail.get("area_id") in fa_opts else None
+                fix_aid = st.selectbox(
+                    "Corrected Area / Locality",
+                    options=fa_opts,
+                    index=fa_opts.index(cur_aid),
+                    format_func=lambda x: fa_lbls[x],
+                    key=f"{key_prefix}_fix_area_{fix_ver}_{fix_did}",
+                )
+            fix_reason = st.text_input(
+                "Reason for location correction (required, min 5 chars)",
+                key=f"{key_prefix}_fix_loc_reason_{fix_ver}",
+                placeholder="e.g. Citizen selected neighboring district by mistake",
+            )
+            if st.button("Apply Location Correction", key=f"{key_prefix}_fix_loc_btn_{fix_ver}"):
+                try:
+                    update_complaint_location(
+                        user,
+                        detail["id"],
+                        reason=fix_reason.strip(),
+                        state_id=fix_sid,
+                        district_id=fix_did,
+                        area_id=fix_aid,
+                    )
+                    st.session_state[flash_key] = f"Location updated for #{detail['incident_id']}."
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+
+    # Staff-only coordinate -> DIGIPIN utility (never shown to citizens)
+    if user.get("role") in ("employee", "admin", "super_admin"):
+        with st.expander("Convert Coordinates to DIGIPIN (Staff Tool)"):
+            sc1, sc2 = st.columns(2)
+            conv_lat = sc1.number_input(
+                "Latitude",
+                value=float(detail.get("latitude") or 16.3067),
+                format="%.6f",
+                key=f"{key_prefix}_dp_lat_{detail['id']}",
+            )
+            conv_lon = sc2.number_input(
+                "Longitude",
+                value=float(detail.get("longitude") or 80.4365),
+                format="%.6f",
+                key=f"{key_prefix}_dp_lon_{detail['id']}",
+            )
+            if st.button("Convert to DIGIPIN", key=f"{key_prefix}_dp_conv_btn_{detail['id']}"):
+                try:
+                    st.success(f"DIGIPIN: `{encode_digipin(conv_lat, conv_lon, hyphenated=True)}`")
+                except ValueError as exc:
+                    st.error(str(exc))
+
     # Soft delete (Super Admin only)
     if can(user, "delete_complaint"):
         st.markdown("---")
@@ -952,9 +1069,10 @@ def _render_hotspot_map(complaints: list[dict], key_prefix: str) -> None:
             fig_geo.update_layout(height=360)
             st.plotly_chart(fig_geo, width="stretch", theme="streamlit")
 
+        centroid_cnt = sum(1 for p in points if p.get("is_centroid"))
         st.caption(
-            f"Showing {len(points)} mapped complaint(s) "
-            f"(pinpoint GPS + area centroid fallback when pin omitted)."
+            f"Showing {len(points)} mapped complaint(s) for staff review "
+            f"({centroid_cnt} use area/district centroids where exact DIGIPIN was not provided)."
         )
 
 
@@ -1067,50 +1185,101 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
     with filter_col2:
         overdue_only = st.checkbox("Overdue only", key=f"{key_prefix}_overdue_only")
 
-    # Jurisdiction / Location filters
-    all_districts = get_districts(active_only=True)
-    dist_opts: list[int | None] = [None, *[d["id"] for d in all_districts]]
-    dist_lbls: dict[int | None, str] = {None: "All Districts"}
-    for d in all_districts:
-        dist_lbls[d["id"]] = d["name"]
+    # Full Address Hierarchy & DIGIPIN Filters
+    countries = get_countries(active_only=True)
+    f_country_id = None
+    f_state_id = None
+    f_dist_id = None
+    f_mandal_id = None
+    f_tv_id = None
+    f_area_id = None
 
-    lcol1, lcol2, lcol3 = st.columns([2, 2, 1])
-    with lcol1:
-        selected_dist_id = st.selectbox(
-            "Filter by District",
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        c_opts: list[int | None] = [None, *[co["id"] for co in countries]]
+        c_lbls = {None: "All Countries", **{co["id"]: co["name"] for co in countries}}
+        f_country_id = st.selectbox(
+            "Country",
+            options=c_opts,
+            format_func=lambda cid: c_lbls.get(cid, str(cid)),
+            key=f"{key_prefix}_country_filter",
+        )
+    with fc2:
+        st_rows = get_states(country_id=f_country_id, active_only=True)
+        s_opts: list[int | None] = [None, *[s["id"] for s in st_rows]]
+        s_lbls = {None: "All States", **{s["id"]: s["name"] for s in st_rows}}
+        f_state_id = st.selectbox(
+            "State",
+            options=s_opts,
+            format_func=lambda sid: s_lbls.get(sid, str(sid)),
+            key=f"{key_prefix}_state_filter_{f_country_id}",
+        )
+    with fc3:
+        all_districts = get_districts(state_id=f_state_id, active_only=True)
+        dist_opts: list[int | None] = [None, *[d["id"] for d in all_districts]]
+        dist_lbls: dict[int | None, str] = {None: "All Districts", **{d["id"]: d["name"] for d in all_districts}}
+        f_dist_id = st.selectbox(
+            "District",
             options=dist_opts,
             format_func=lambda did: dist_lbls.get(did, str(did)),
-            key=f"{key_prefix}_district_filter",
+            key=f"{key_prefix}_district_filter_{f_state_id}",
         )
-    selected_mandal_id = None
-    mandal_rows = get_mandals(selected_dist_id) if selected_dist_id is not None else []
-    with lcol2:
+    with fc4:
+        mandal_rows = get_mandals(f_dist_id) if f_dist_id is not None else []
         if mandal_rows:
             m_opts: list[int | None] = [None, *[m["id"] for m in mandal_rows]]
-            m_lbls = {None: "All Mandals", **{m["id"]: m["name"] for m in mandal_rows}}
-            selected_mandal_id = st.selectbox(
-                "Filter by Mandal",
+            m_lbls = {None: "All Sub-districts", **{m["id"]: m["name"] for m in mandal_rows}}
+            f_mandal_id = st.selectbox(
+                "Sub-district (Mandal)",
                 options=m_opts,
                 format_func=lambda mid: m_lbls.get(mid, str(mid)),
-                key=f"{key_prefix}_mandal_filter",
+                key=f"{key_prefix}_mandal_filter_{f_dist_id}",
             )
         else:
-            st.text_input(
-                "Filter by Mandal",
-                value="N/A (no mandal data)" if selected_dist_id else "Select district first",
-                disabled=True,
-                key=f"{key_prefix}_mandal_disabled",
+            st.caption("Sub-district: select district with mandal data")
+
+    fc5, fc6, fc7, fc8 = st.columns([2, 2, 1, 1], vertical_alignment="bottom")
+    with fc5:
+        tv_rows = get_towns_villages(f_dist_id, mandal_id=f_mandal_id) if f_dist_id is not None else []
+        if tv_rows:
+            tv_opts: list[int | None] = [None, *[t["id"] for t in tv_rows]]
+            tv_lbls = {None: "All Towns / Villages", **{t["id"]: t["name"] for t in tv_rows}}
+            f_tv_id = st.selectbox(
+                "Town / Village",
+                options=tv_opts,
+                format_func=lambda tid: tv_lbls.get(tid, str(tid)),
+                key=f"{key_prefix}_tv_filter_{f_dist_id}_{f_mandal_id}",
             )
-    with lcol3:
+        else:
+            st.caption("Town/Village: select district first")
+    with fc6:
+        area_rows = get_areas(f_dist_id, mandal_id=f_mandal_id, town_village_id=f_tv_id) if f_dist_id is not None else []
+        if area_rows:
+            a_opts: list[int | None] = [None, *[a["id"] for a in area_rows]]
+            a_lbls = {None: "All Areas", **{a["id"]: a["name"] for a in area_rows}}
+            f_area_id = st.selectbox(
+                "Area / Locality",
+                options=a_opts,
+                format_func=lambda aid: a_lbls.get(aid, str(aid)),
+                key=f"{key_prefix}_area_filter_{f_dist_id}_{f_mandal_id}_{f_tv_id}",
+            )
+        else:
+            st.caption("Area: select district first")
+    with fc7:
         pincode_filter = st.text_input(
-            "Filter by Pincode",
+            "Pincode",
             max_chars=6,
             placeholder="e.g. 522002",
             key=f"{key_prefix}_pincode_filter",
         )
+    with fc8:
+        digipin_flagged_only = st.checkbox(
+            "DIGIPIN flagged",
+            key=f"{key_prefix}_dp_flagged_filter",
+        )
 
     search_query = st.text_input(
-        "Search by description, Incident ID, Location, Department, or Assignee",
+        "Search by description, Incident ID, Location, Address, DIGIPIN, Department, or Assignee",
         key=f"{key_prefix}_search",
         placeholder="Type to filter...",
     )
@@ -1129,9 +1298,14 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
 
     filtered = filter_complaints_by_location(
         filtered,
-        district_id=selected_dist_id,
-        mandal_id=selected_mandal_id,
+        country_id=f_country_id,
+        state_id=f_state_id,
+        district_id=f_dist_id,
+        mandal_id=f_mandal_id,
+        town_village_id=f_tv_id,
+        area_id=f_area_id,
         pincode=pincode_filter.strip() or None,
+        digipin_flagged_only=digipin_flagged_only,
     )
 
     if search_query.strip():
@@ -1142,7 +1316,12 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
             or q in (c.get("incident_id") or "").lower()
             or q in (c.get("department") or "").lower()
             or q in (c.get("location") or "").lower()
+            or q in (c.get("formatted_address") or "").lower()
+            or q in (c.get("digipin") or "").lower()
+            or q in (c.get("state_name") or "").lower()
             or q in (c.get("district_name") or "").lower()
+            or q in (c.get("mandal_name") or "").lower()
+            or q in (c.get("town_village_name") or "").lower()
             or q in (c.get("area_name") or "").lower()
             or q in (c.get("pincode") or "").lower()
             or q in (c.get("assigned_username") or "unassigned").lower()

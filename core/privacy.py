@@ -70,11 +70,18 @@ def export_own_data(actor: dict | None, fmt: str = "json") -> dict[str, Any]:
         comp_rows = conn.execute(
             """
             SELECT c.id, c.incident_id, d.name AS department, c.text, c.location,
-                   c.pincode, dist.name AS district, ar.name AS area,
+                   c.house_no, c.street, c.landmark, c.digipin, c.formatted_address,
+                   c.pincode, co.name AS country, st.name AS state,
+                   dist.name AS district, mnd.name AS mandal, tv.name AS town_village,
+                   ar.name AS area,
                    c.priority, c.status, c.due_at, c.resolved_at, c.created_at, c.updated_at
             FROM complaints c
             JOIN departments d ON d.id = c.department_id
+            LEFT JOIN countries co ON co.id = c.country_id
+            LEFT JOIN states st ON st.id = c.state_id
             LEFT JOIN districts dist ON dist.id = c.district_id
+            LEFT JOIN mandals mnd ON mnd.id = c.mandal_id
+            LEFT JOIN towns_villages tv ON tv.id = c.town_village_id
             LEFT JOIN areas ar ON ar.id = c.area_id
             WHERE c.user_id = ? AND c.is_deleted = 0
             ORDER BY c.id ASC
@@ -125,28 +132,33 @@ def export_own_data(actor: dict | None, fmt: str = "json") -> dict[str, Any]:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "record_type", "incident_id", "department", "district", "area",
-        "pincode", "priority", "status", "text_or_comment", "rating_or_detail", "created_at",
+        "record_type", "incident_id", "department", "country", "state", "district",
+        "mandal", "town_village", "area", "pincode", "house_no", "street",
+        "landmark", "digipin", "priority", "status", "text_or_comment", "rating_or_detail", "created_at",
     ])
     p = payload["profile"]
     writer.writerow([
-        "profile", "", "", "", "", "", "", "",
+        "profile", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
         f"username={p['username']}; full_name={p['full_name']}; email={p['email']}",
         f"phone={p['phone']}; lang={p['preferred_language']}", p["created_at"],
     ])
     for c in payload["complaints"]:
         writer.writerow([
-            "complaint", c["incident_id"], c["department"], c["district"] or "", c["area"] or "",
-            c["pincode"] or "", c["priority"], c["status"], c["text"], c["location"], c["created_at"],
+            "complaint", c["incident_id"], c["department"],
+            c.get("country") or "", c.get("state") or "", c.get("district") or "",
+            c.get("mandal") or "", c.get("town_village") or "", c.get("area") or "",
+            c.get("pincode") or "", c.get("house_no") or "", c.get("street") or "",
+            c.get("landmark") or "", c.get("digipin") or "",
+            c["priority"], c["status"], c["text"], c.get("formatted_address") or c["location"], c["created_at"],
         ])
     for f in payload["feedback"]:
         writer.writerow([
-            "feedback", f["incident_id"], "", "", "", "", "",
+            "feedback", f["incident_id"], "", "", "", "", "", "", "", "", "", "", "", "", "",
             "Accepted" if f["accepted"] else "Reopened", f["comment"] or "", f"rating={f['rating']}", f["created_at"],
         ])
     for s in payload["supports"]:
         writer.writerow([
-            "support", s["incident_id"], "", "", "", "", "", "",
+            "support", s["incident_id"], "", "", "", "", "", "", "", "", "", "", "", "", "", "",
             "Supported existing cluster", "", s["created_at"],
         ])
 
@@ -198,9 +210,22 @@ def anonymize_own_account(actor: dict | None, reason: str = "") -> dict[str, Any
             """,
             (anon_username, rand_hash, rand_salt, now_str, uid),
         )
-        # Preserve anonymized complaints + department/district/status; scrub free-text personal location notes
+        # Preserve anonymized complaints + department/district/status; scrub all personal address fields & DIGIPIN
         conn.execute(
-            "UPDATE complaints SET location = 'Anonymized Area', updated_at = ? WHERE user_id = ?",
+            """
+            UPDATE complaints
+            SET location = 'Anonymized Area',
+                house_no = '',
+                street = '',
+                landmark = '',
+                digipin = '',
+                digipin_lat = NULL,
+                digipin_lon = NULL,
+                digipin_flagged = 0,
+                formatted_address = 'Anonymized Area',
+                updated_at = ?
+            WHERE user_id = ?
+            """,
             (now_str, uid),
         )
         conn.execute(

@@ -24,6 +24,7 @@ from core.permissions import require
 from core.security import sanitize_text
 from core.sla import compute_due_at
 from core.wards import haversine_meters
+from geo.digipin import are_digipin_neighbors, normalize_digipin
 
 _logger = get_logger("clusters")
 
@@ -127,54 +128,82 @@ def find_similar_open_complaints(
     *,
     latitude: float | None = None,
     longitude: float | None = None,
+    digipin: str | None = None,
     pincode: str | None = None,
     state_id: int | None = None,
     district_id: int | None = None,
     mandal_id: int | None = None,
+    town_village_id: int | None = None,
     area_id: int | None = None,
     radius_m: float | None = None,
     threshold: float | None = None,
+    match_level: str | None = None,
     exclude_complaint_id: int | None = None,
     force_tfidf: bool = False,
 ) -> dict[str, Any]:
     """
-    Search open complaints in the same department within `radius_m` (default 300 m)
-    using multilingual sentence embeddings (fallback TF-IDF cosine similarity).
+    Search open complaints in the same department using configurable structured location
+    matching in order:
+      1) same or neighboring DIGIPIN cell ('digipin')
+      2) same Area / Locality ('area')
+      3) same 6-digit Pincode ('pincode')
+    Falls back to legacy radius filtering ONLY when called solely with raw coordinates.
     """
     clean_q = sanitize_text(text or "", max_length=2000, field_name="Complaint text")
     if len(clean_q) < 4:
-        return {"matches": [], "method": "none", "radius_m": 0.0, "threshold": 0.0}
+        return {"matches": [], "method": "none", "matched_by": "none", "radius_m": 0.0, "threshold": 0.0}
 
     eff_radius = float(radius_m if radius_m is not None else get_env_float("CGS_DUPLICATE_RADIUS_M", 300.0))
+    cfg_level = (match_level or get_env_str("CGS_DUPLICATE_MATCH_LEVEL", "auto")).strip().lower()
+    if cfg_level not in ("auto", "digipin", "area", "pincode"):
+        cfg_level = "auto"
 
+    clean_dp = ""
+    if digipin and str(digipin).strip():
+        try:
+            clean_dp = normalize_digipin(str(digipin).strip(), hyphenated=False)
+        except ValueError:
+            clean_dp = ""
+
+    eff_pin = str(pincode or "").strip()
+    eff_area_id = int(area_id) if area_id is not None else None
     lat = float(latitude) if latitude is not None else None
     lon = float(longitude) if longitude is not None else None
-    if lat is None or lon is None:
-        try:
-            loc_info = resolve_location_selection(
-                pincode=pincode,
-                state_id=state_id,
-                district_id=district_id,
-                mandal_id=mandal_id,
-                area_id=area_id,
-            )
-            if lat is None:
-                lat = loc_info.get("latitude")
-            if lon is None:
-                lon = loc_info.get("longitude")
-        except ValueError:
-            pass
 
-    if lat is None or lon is None:
-        return {"matches": [], "method": "no_coordinates", "radius_m": eff_radius, "threshold": 0.0}
+    if eff_area_id is None or not eff_pin:
+        if any(x is not None and str(x).strip() != "" for x in (pincode, district_id, area_id)):
+            try:
+                loc_info = resolve_location_selection(
+                    pincode=pincode,
+                    state_id=state_id,
+                    district_id=district_id,
+                    mandal_id=mandal_id,
+                    town_village_id=town_village_id,
+                    area_id=area_id,
+                )
+                if eff_area_id is None and area_id is not None:
+                    eff_area_id = loc_info.get("area_id")
+                if not eff_pin:
+                    eff_pin = str(loc_info.get("pincode") or "").strip()
+                if lat is None:
+                    lat = loc_info.get("latitude")
+                if lon is None:
+                    lon = loc_info.get("longitude")
+            except ValueError:
+                pass
+
+    has_structured_loc = bool(clean_dp or eff_area_id is not None or eff_pin)
+    if not has_structured_loc and (lat is None or lon is None):
+        return {"matches": [], "method": "no_location", "matched_by": "none", "radius_m": eff_radius, "threshold": 0.0}
 
     with closing(_db.get_connection()) as conn:
         rows = conn.execute(
             """
             SELECT c.id, c.incident_id, c.user_id, c.text, c.status, c.priority,
-                   c.district_id, c.incident_group_id,
-                   COALESCE(c.latitude, ar.latitude) AS eff_lat,
-                   COALESCE(c.longitude, ar.longitude) AS eff_lon,
+                   c.district_id, c.area_id, c.pincode, COALESCE(c.digipin, '') AS digipin,
+                   c.incident_group_id,
+                   COALESCE(c.digipin_lat, c.latitude, ar.latitude) AS eff_lat,
+                   COALESCE(c.digipin_lon, c.longitude, ar.longitude) AS eff_lon,
                    COALESCE(ig.member_count, 1) AS member_count,
                    COALESCE(ig.support_count, (
                        SELECT COUNT(*) FROM complaint_supports cs WHERE cs.complaint_id = c.id
@@ -185,16 +214,96 @@ def find_similar_open_complaints(
             LEFT JOIN incident_groups ig ON ig.id = c.incident_group_id
             WHERE c.is_deleted = 0
               AND c.department_id = ?
-              AND c.status NOT IN ('Resolved', 'Closed')
+              AND c.status NOT IN ('Resolved', 'Closed', 'Withdrawn')
             ORDER BY c.created_at DESC, c.id DESC
             """,
             (int(department_id),),
         ).fetchall()
 
+    filtered_rows = [
+        r for r in rows
+        if not (exclude_complaint_id is not None and int(r["id"]) == int(exclude_complaint_id))
+    ]
+
+    def _score_tier(tier_rows: list[tuple[Any, float | None]], level_lbl: str) -> tuple[list[dict], str, float]:
+        if not tier_rows:
+            return [], "tfidf_fallback", 0.0
+        candidate_texts = [str(r["text"]) for r, _ in tier_rows]
+        scores, method = compute_similarity_scores(clean_q, candidate_texts, force_tfidf=force_tfidf)
+        if threshold is not None:
+            eff_thresh = float(threshold)
+        elif method == "embedding":
+            eff_thresh = get_env_float("CGS_DUPLICATE_EMBED_THRESHOLD", 0.72)
+        else:
+            eff_thresh = get_env_float("CGS_DUPLICATE_SIM_THRESHOLD", 0.55)
+
+        out = []
+        for (r, dist_m), sim in zip(tier_rows, scores):
+            if sim >= eff_thresh:
+                sup_cnt = int(r["support_count"] or 0)
+                mem_cnt = int(r["member_count"] or 1)
+                out.append({
+                    "complaint_id": int(r["id"]),
+                    "incident_id": r["incident_id"],
+                    "user_id": int(r["user_id"]),
+                    "text": r["text"],
+                    "text_preview": r["text"][:140],
+                    "status": r["status"],
+                    "priority": r["priority"],
+                    "distance_m": dist_m,
+                    "match_level": level_lbl,
+                    "similarity": sim,
+                    "incident_group_id": r["incident_group_id"],
+                    "support_count": sup_cnt,
+                    "member_count": mem_cnt,
+                    "report_count": mem_cnt + sup_cnt,
+                    "created_at": r["created_at"],
+                })
+        out.sort(key=lambda m: (-m["similarity"], m["distance_m"] if m["distance_m"] is not None else 0.0))
+        return out, method, eff_thresh
+
+    if has_structured_loc:
+        tiers: list[tuple[str, list[tuple[Any, float | None]]]] = []
+        if clean_dp and cfg_level in ("auto", "digipin"):
+            dp_rows = [
+                (r, 0.0) for r in filtered_rows
+                if r["digipin"] and are_digipin_neighbors(clean_dp, r["digipin"])
+            ]
+            tiers.append(("digipin_cell", dp_rows))
+        if eff_area_id is not None and cfg_level in ("auto", "area", "pincode"):
+            ar_rows = [
+                (r, None) for r in filtered_rows
+                if r["area_id"] is not None and int(r["area_id"]) == eff_area_id
+            ]
+            tiers.append(("area", ar_rows))
+        if eff_pin and cfg_level in ("auto", "pincode"):
+            pin_rows = [
+                (r, None) for r in filtered_rows
+                if str(r["pincode"] or "").strip() == eff_pin
+            ]
+            tiers.append(("pincode", pin_rows))
+
+        for lvl_lbl, t_rows in tiers:
+            matched, method, eff_thresh = _score_tier(t_rows, lvl_lbl)
+            if matched:
+                return {
+                    "matches": matched,
+                    "method": method,
+                    "matched_by": lvl_lbl,
+                    "radius_m": eff_radius,
+                    "threshold": eff_thresh,
+                }
+        return {
+            "matches": [],
+            "method": "tfidf_fallback",
+            "matched_by": cfg_level,
+            "radius_m": eff_radius,
+            "threshold": 0.0,
+        }
+
+    # Legacy pure-coordinate fallback (only when caller passed lat/lon with no address hierarchy)
     nearby: list[tuple[Any, float]] = []
-    for r in rows:
-        if exclude_complaint_id is not None and int(r["id"]) == int(exclude_complaint_id):
-            continue
+    for r in filtered_rows:
         r_lat = r["eff_lat"]
         r_lon = r["eff_lon"]
         if r_lat is None or r_lon is None:
@@ -203,44 +312,11 @@ def find_similar_open_complaints(
         if dist <= eff_radius:
             nearby.append((r, round(dist, 1)))
 
-    if not nearby:
-        return {"matches": [], "method": "tfidf_fallback", "radius_m": eff_radius, "threshold": 0.0}
-
-    candidate_texts = [str(r["text"]) for r, _ in nearby]
-    scores, method = compute_similarity_scores(clean_q, candidate_texts, force_tfidf=force_tfidf)
-    if threshold is not None:
-        eff_thresh = float(threshold)
-    elif method == "embedding":
-        eff_thresh = get_env_float("CGS_DUPLICATE_EMBED_THRESHOLD", 0.72)
-    else:
-        eff_thresh = get_env_float("CGS_DUPLICATE_SIM_THRESHOLD", 0.55)
-
-    matches = []
-    for (r, dist_m), sim in zip(nearby, scores):
-        if sim >= eff_thresh:
-            sup_cnt = int(r["support_count"] or 0)
-            mem_cnt = int(r["member_count"] or 1)
-            matches.append({
-                "complaint_id": int(r["id"]),
-                "incident_id": r["incident_id"],
-                "user_id": int(r["user_id"]),
-                "text": r["text"],
-                "text_preview": r["text"][:140],
-                "status": r["status"],
-                "priority": r["priority"],
-                "distance_m": dist_m,
-                "similarity": sim,
-                "incident_group_id": r["incident_group_id"],
-                "support_count": sup_cnt,
-                "member_count": mem_cnt,
-                "report_count": mem_cnt + sup_cnt,
-                "created_at": r["created_at"],
-            })
-
-    matches.sort(key=lambda m: (-m["similarity"], m["distance_m"]))
+    matched, method, eff_thresh = _score_tier(nearby, "coordinates")
     return {
-        "matches": matches,
+        "matches": matched,
         "method": method,
+        "matched_by": "coordinates" if matched else "none",
         "radius_m": eff_radius,
         "threshold": eff_thresh,
     }

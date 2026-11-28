@@ -18,12 +18,13 @@ from core.images import (
     prepare_images,
     save_prepared_images_in_conn,
 )
-from core.locations import resolve_location_selection
+from core.locations import build_formatted_address, resolve_location_selection
 from core.moderation import assess_submission_safety
 from core.permissions import require
 from core.security import sanitize_text
 from core.sla import AUTO_CLOSE_DAYS, compute_due_at, parse_utc
 from core.wards import find_nearest_ward
+from geo.digipin import check_digipin_against_location
 from ml.classifier import predict_complaint
 from nlp.duration import looks_like_unparsed_duration
 
@@ -150,17 +151,58 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "department_is_active": bool(row["department_is_active"]),
         "ward_id":              row["ward_id"],
         "ward_name":            row["ward_name"],
+        "country_id":           row["country_id"],
+        "country_name":         row["country_name"] or "",
         "state_id":             row["state_id"],
         "state_name":           row["state_name"] or "",
         "district_id":          row["district_id"],
         "district_name":        row["district_name"] or "",
         "mandal_id":            row["mandal_id"],
         "mandal_name":          row["mandal_name"] or "",
+        "town_village_id":      row["town_village_id"],
+        "town_village_name":    row["town_village_name"] or "",
         "area_id":              row["area_id"],
         "area_name":            row["area_name"] or "",
         "pincode":              row["pincode"] or "",
-        "latitude":             row["latitude"] if row["latitude"] is not None else row["area_latitude"],
-        "longitude":            row["longitude"] if row["longitude"] is not None else row["area_longitude"],
+        "house_no":             row["house_no"] or "",
+        "street":               row["street"] or "",
+        "landmark":             row["landmark"] or "",
+        "digipin":              row["digipin"] or "",
+        "digipin_lat":          row["digipin_lat"],
+        "digipin_lon":          row["digipin_lon"],
+        "digipin_flagged":      bool(row["digipin_flagged"] or 0),
+        "formatted_address":    row["formatted_address"] or row["location"] or "",
+        "latitude": (
+            row["digipin_lat"]
+            if row["digipin_lat"] is not None
+            else (
+                row["latitude"]
+                if row["latitude"] is not None
+                else (row["area_latitude"] if row["area_latitude"] is not None else row["district_latitude"])
+            )
+        ),
+        "longitude": (
+            row["digipin_lon"]
+            if row["digipin_lon"] is not None
+            else (
+                row["longitude"]
+                if row["longitude"] is not None
+                else (row["area_longitude"] if row["area_longitude"] is not None else row["district_longitude"])
+            )
+        ),
+        "coord_source": (
+            "digipin"
+            if row["digipin_lat"] is not None
+            else (
+                "area_centroid"
+                if row["area_latitude"] is not None
+                else (
+                    "district_centroid"
+                    if row["district_latitude"] is not None
+                    else ("gps_legacy" if row["latitude"] is not None else "none")
+                )
+            )
+        ),
         "raw_latitude":         row["latitude"],
         "raw_longitude":        row["longitude"],
         "priority":             row["priority"],
@@ -216,18 +258,32 @@ SELECT c.id,
        d.is_active AS department_is_active,
        c.ward_id,
        w.name AS ward_name,
+       c.country_id,
+       co.name AS country_name,
        c.state_id,
        st.name AS state_name,
        c.district_id,
        dist.name AS district_name,
+       dist.latitude AS district_latitude,
+       dist.longitude AS district_longitude,
        COALESCE(dist.allow_self_claim, 0) AS district_allow_self_claim,
        c.mandal_id,
        mnd.name AS mandal_name,
+       c.town_village_id,
+       tv.name AS town_village_name,
        c.area_id,
        ar.name AS area_name,
        ar.latitude AS area_latitude,
        ar.longitude AS area_longitude,
        c.pincode,
+       COALESCE(c.house_no, '') AS house_no,
+       COALESCE(c.street, '') AS street,
+       COALESCE(c.landmark, '') AS landmark,
+       COALESCE(c.digipin, '') AS digipin,
+       c.digipin_lat,
+       c.digipin_lon,
+       COALESCE(c.digipin_flagged, 0) AS digipin_flagged,
+       COALESCE(c.formatted_address, '') AS formatted_address,
        c.latitude,
        c.longitude,
        c.priority,
@@ -270,9 +326,11 @@ FROM complaints c
 JOIN departments d ON d.id = c.department_id
 JOIN users u ON u.id = c.user_id
 LEFT JOIN wards w ON w.id = c.ward_id
+LEFT JOIN countries co ON co.id = c.country_id
 LEFT JOIN states st ON st.id = c.state_id
 LEFT JOIN districts dist ON dist.id = c.district_id
 LEFT JOIN mandals mnd ON mnd.id = c.mandal_id
+LEFT JOIN towns_villages tv ON tv.id = c.town_village_id
 LEFT JOIN areas ar ON ar.id = c.area_id
 LEFT JOIN incident_groups ig ON ig.id = c.incident_group_id
 LEFT JOIN users emp ON emp.id = c.assigned_to
@@ -290,17 +348,24 @@ def submit_complaint(
     longitude: float | None = None,
     ward_id: int | None = None,
     pincode: str | None = None,
+    country_id: int | None = None,
     state_id: int | None = None,
     district_id: int | None = None,
     mandal_id: int | None = None,
+    town_village_id: int | None = None,
     area_id: int | None = None,
+    *,
+    house_no: str = "",
+    street: str = "",
+    landmark: str = "",
+    digipin: str = "",
+    require_street_or_landmark: bool = False,
 ) -> str:
     """
     Requires 'submit_complaint' permission (only 'user' role).
-    When jurisdiction/location parameters (pincode, district_id, area_id) are provided,
-    validates India Post pincode/hierarchy and puts the complaint in 'Awaiting Assignment'
-    for the District Admin (no auto-assign). Legacy calls without location hierarchy keep
-    compatibility ('Pending' + auto-assign).
+    Validates full country -> state -> district -> (mandal) -> (town/village) -> area -> pincode
+    chain, structured address lines (house_no, street, landmark), optional DIGIPIN consistency flag,
+    and routes to 'Awaiting Assignment' for District Admin.
     """
     require(actor, "submit_complaint")
 
@@ -311,35 +376,87 @@ def submit_complaint(
     if len(clean_text) < 10:
         raise ValueError("Complaint description must be at least 10 characters long.")
 
-    has_loc_hierarchy = any(x is not None and str(x).strip() != "" for x in (pincode, district_id, area_id))
+    clean_house = sanitize_text(house_no or "", max_length=80, field_name="House / Door / Flat number")
+    clean_street = sanitize_text(street or "", max_length=150, field_name="Street / Colony / Road")
+    clean_landmark = sanitize_text(landmark or "", max_length=200, field_name="Landmark / Locality")
     clean_location = sanitize_text(location or "", max_length=200, field_name="Location / Landmark")
-    if not has_loc_hierarchy and len(clean_location) < 2:
+
+    if not clean_street and not clean_landmark and clean_location:
+        clean_landmark = clean_location
+
+    if require_street_or_landmark and not clean_street and not clean_landmark:
+        raise ValueError(
+            "Landmark or locality description is required when no Street / Road is given."
+        )
+
+    has_loc_hierarchy = any(
+        x is not None and str(x).strip() != ""
+        for x in (pincode, country_id, district_id, mandal_id, town_village_id, area_id)
+    )
+    if not has_loc_hierarchy and len(clean_location) < 2 and not clean_street and not clean_landmark:
         raise ValueError("Location / Landmark is required (at least 2 characters).")
 
     resolved_loc = resolve_location_selection(
         pincode=pincode,
+        country_id=country_id,
         state_id=state_id,
         district_id=district_id,
         mandal_id=mandal_id,
+        town_village_id=town_village_id,
         area_id=area_id,
     )
+    res_country_id = resolved_loc["country_id"] or 1
     res_state_id = resolved_loc["state_id"]
     res_dist_id = resolved_loc["district_id"]
     res_mandal_id = resolved_loc["mandal_id"]
+    res_tv_id = resolved_loc["town_village_id"]
     res_area_id = resolved_loc["area_id"]
     res_pincode = resolved_loc["pincode"]
 
     if res_dist_id is None:
         raise ValueError(
-            "A valid district and location (via 6-digit pincode or State -> District -> Area) are required."
+            "A valid district and location (via 6-digit pincode or structured address hierarchy) are required."
         )
 
-    if not clean_location:
-        parts = [p for p in (resolved_loc.get("area_name"), resolved_loc.get("district_name"), res_pincode) if p]
-        clean_location = ", ".join(parts) or "Location recorded"
+    # DIGIPIN check (optional & non-blocking; flags invalid/faraway codes for staff review)
+    dp_info = check_digipin_against_location(
+        digipin,
+        resolved_loc.get("latitude"),
+        resolved_loc.get("longitude"),
+    )
+    stored_digipin = dp_info.get("formatted") or dp_info.get("normalized") or ""
+    dp_lat = dp_info.get("latitude")
+    dp_lon = dp_info.get("longitude")
+    dp_flagged = 1 if dp_info.get("flagged") else 0
 
-    eff_lat = float(latitude) if latitude is not None else resolved_loc.get("latitude")
-    eff_lon = float(longitude) if longitude is not None else resolved_loc.get("longitude")
+    # Coordinate preference order: DIGIPIN decode -> explicit/legacy lat/lon -> area/district centroid
+    if dp_lat is not None and dp_lon is not None:
+        eff_lat: float | None = float(dp_lat)
+        eff_lon: float | None = float(dp_lon)
+    elif latitude is not None and longitude is not None:
+        eff_lat = float(latitude)
+        eff_lon = float(longitude)
+    else:
+        eff_lat = resolved_loc.get("latitude")
+        eff_lon = resolved_loc.get("longitude")
+
+    formatted_addr = build_formatted_address(
+        house_no=clean_house,
+        street=clean_street,
+        landmark=clean_landmark,
+        area_name=resolved_loc.get("area_name") or "",
+        town_village_name=resolved_loc.get("town_village_name") or "",
+        mandal_name=resolved_loc.get("mandal_name") or "",
+        district_name=resolved_loc.get("district_name") or "",
+        state_name=resolved_loc.get("state_name") or "",
+        pincode=res_pincode,
+        country_name=resolved_loc.get("country_name") or "",
+        digipin=stored_digipin,
+    )
+    if not clean_location:
+        clean_location = formatted_addr or ", ".join(
+            p for p in (resolved_loc.get("area_name"), resolved_loc.get("district_name"), res_pincode) if p
+        ) or "Location recorded"
 
     file_list = list(files) if files else []
     if len(file_list) > MAX_IMAGES_PER_COMPLAINT:
@@ -401,13 +518,14 @@ def submit_complaint(
             """
             INSERT INTO complaints
                 (incident_id, user_id, text, location, department_id, ward_id,
-                 state_id, district_id, mandal_id, area_id, pincode,
+                 country_id, state_id, district_id, mandal_id, town_village_id, area_id, pincode,
+                 house_no, street, landmark, digipin, digipin_lat, digipin_lon, digipin_flagged, formatted_address,
                  latitude, longitude,
                  priority, status, assigned_to, assigned_at, due_at, escalation_level, reopen_count,
                  is_deleted, is_spam, ml_suggested_department, ml_confidence, ml_top_terms,
                  duration_hours, duration_matched_text, duration_confidence, is_recurring, priority_reason,
                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 incident_id,
@@ -416,11 +534,21 @@ def submit_complaint(
                 clean_location,
                 department_id,
                 resolved_ward_id,
+                res_country_id,
                 res_state_id,
                 res_dist_id,
                 res_mandal_id,
+                res_tv_id,
                 res_area_id,
                 res_pincode,
+                clean_house,
+                clean_street,
+                clean_landmark,
+                stored_digipin,
+                float(dp_lat) if dp_lat is not None else None,
+                float(dp_lon) if dp_lon is not None else None,
+                dp_flagged,
+                formatted_addr,
                 float(eff_lat) if eff_lat is not None else None,
                 float(eff_lon) if eff_lon is not None else None,
                 priority,
@@ -1832,6 +1960,194 @@ def transfer_complaint(
     from notifications.service import emit_complaint_event
     emit_complaint_event("complaint_transferred", complaint_id, status_label=new_status)
     return get_complaint_detail(actor, complaint_id, now=now_dt)
+
+
+def update_complaint_location(
+    actor: dict | None,
+    complaint_id: int,
+    *,
+    reason: str,
+    country_id: int | None = None,
+    state_id: int | None = None,
+    district_id: int | None = None,
+    mandal_id: int | None = None,
+    town_village_id: int | None = None,
+    area_id: int | None = None,
+    pincode: str | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """
+    Admin (within jurisdiction) or Super Admin corrects a wrongly chosen area or district
+    with a mandatory audit-logged reason (>= 5 chars).
+    If district_id changes, resets assignment & SLA and re-routes to the new district's Admin.
+    """
+    require(actor, "edit_complaint_fields")
+    clean_reason = sanitize_text(reason or "", max_length=500, field_name="Location correction reason")
+    if len(clean_reason) < 5:
+        raise ValueError("A reason (at least 5 characters) is required to correct complaint location.")
+
+    resolved = resolve_location_selection(
+        pincode=pincode,
+        country_id=country_id,
+        state_id=state_id,
+        district_id=district_id,
+        mandal_id=mandal_id,
+        town_village_id=town_village_id,
+        area_id=area_id,
+    )
+    if resolved["district_id"] is None:
+        raise ValueError("Target district is required.")
+
+    now_dt = _utc_now(now)
+    now_str = _fmt_dt(now_dt)
+
+    with closing(_db.get_connection()) as conn, conn:
+        row = conn.execute(
+            """
+            SELECT c.*, d_old.name AS old_district_name, ar_old.name AS old_area_name,
+                   u_emp.username AS old_emp_username
+            FROM complaints c
+            LEFT JOIN districts d_old ON d_old.id = c.district_id
+            LEFT JOIN areas ar_old ON ar_old.id = c.area_id
+            LEFT JOIN users u_emp ON u_emp.id = c.assigned_to
+            WHERE c.id = ?
+            """,
+            (int(complaint_id),),
+        ).fetchone()
+        if row is None or row["is_deleted"]:
+            raise ValueError(f"Complaint with id {complaint_id} not found.")
+        _assert_admin_jurisdiction(conn, actor, row["district_id"], row["department_id"])
+
+        old_dist_id = row["district_id"]
+        new_dist_id = resolved["district_id"]
+        dist_changed = old_dist_id != new_dist_id
+
+        dp_info = check_digipin_against_location(
+            row["digipin"],
+            resolved.get("latitude"),
+            resolved.get("longitude"),
+        )
+        dp_flagged = 1 if dp_info.get("flagged") else 0
+        eff_lat = row["digipin_lat"] if row["digipin_lat"] is not None else resolved.get("latitude")
+        eff_lon = row["digipin_lon"] if row["digipin_lon"] is not None else resolved.get("longitude")
+
+        new_formatted = build_formatted_address(
+            house_no=row["house_no"] or "",
+            street=row["street"] or "",
+            landmark=row["landmark"] or "",
+            area_name=resolved.get("area_name") or "",
+            town_village_name=resolved.get("town_village_name") or "",
+            mandal_name=resolved.get("mandal_name") or "",
+            district_name=resolved.get("district_name") or "",
+            state_name=resolved.get("state_name") or "",
+            pincode=resolved.get("pincode") or "",
+            country_name=resolved.get("country_name") or "",
+            digipin=row["digipin"] or "",
+        )
+
+        old_status = row["status"]
+        new_status = "Awaiting Assignment" if dist_changed else old_status
+        new_assigned_to = None if dist_changed else row["assigned_to"]
+        new_assigned_by = None if dist_changed else row["assigned_by"]
+        new_assigned_at = None if dist_changed else row["assigned_at"]
+        new_accepted_at = None if dist_changed else row["accepted_at"]
+        new_due = (
+            compute_due_at(conn, row["department_id"], row["priority"], now_dt)
+            if dist_changed
+            else row["due_at"]
+        )
+
+        conn.execute(
+            """
+            UPDATE complaints
+            SET country_id = ?, state_id = ?, district_id = ?, mandal_id = ?,
+                town_village_id = ?, area_id = ?, pincode = ?,
+                formatted_address = ?, location = ?,
+                latitude = ?, longitude = ?, digipin_flagged = ?,
+                status = ?, assigned_to = ?, assigned_by = ?, assigned_at = ?, accepted_at = ?,
+                due_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                resolved["country_id"] or 1,
+                resolved["state_id"],
+                new_dist_id,
+                resolved["mandal_id"],
+                resolved["town_village_id"],
+                resolved["area_id"],
+                resolved["pincode"] or "",
+                new_formatted,
+                new_formatted or row["location"],
+                float(eff_lat) if eff_lat is not None else None,
+                float(eff_lon) if eff_lon is not None else None,
+                dp_flagged,
+                new_status,
+                new_assigned_to,
+                new_assigned_by,
+                new_assigned_at,
+                new_accepted_at,
+                new_due,
+                now_str,
+                int(complaint_id),
+            ),
+        )
+
+        old_loc_lbl = f"{row['old_district_name'] or ''} / {row['old_area_name'] or ''} ({row['pincode'] or ''})".strip()
+        new_loc_lbl = f"{resolved['district_name']} / {resolved['area_name']} ({resolved['pincode']})".strip()
+        conn.execute(
+            """
+            INSERT INTO complaint_updates
+                (complaint_id, employee_id, actor_label, field_name,
+                 old_status, new_status, old_value, new_value, source, remark, created_at)
+            VALUES (?, ?, ?, 'location', ?, ?, ?, ?, 'staff_location_fix', ?, ?)
+            """,
+            (
+                int(complaint_id),
+                actor["id"],
+                actor.get("username", ""),
+                old_status,
+                new_status,
+                old_loc_lbl,
+                new_loc_lbl,
+                f"Location corrected: {clean_reason}",
+                now_str,
+            ),
+        )
+        if dist_changed and row["assigned_to"] is not None:
+            conn.execute(
+                """
+                INSERT INTO complaint_updates
+                    (complaint_id, employee_id, actor_label, field_name,
+                     old_status, new_status, old_value, new_value, source, remark, created_at)
+                VALUES (?, ?, ?, 'assigned_to', ?, ?, ?, 'Unassigned', 'staff_location_fix', ?, ?)
+                """,
+                (
+                    int(complaint_id),
+                    actor["id"],
+                    actor.get("username", ""),
+                    old_status,
+                    new_status,
+                    row["old_emp_username"] or "Assigned",
+                    f"Re-routed to {resolved['district_name']} district Admin queue",
+                    now_str,
+                ),
+            )
+
+    from notifications.service import emit_complaint_event
+    emit_complaint_event(
+        "status_changed",
+        complaint_id,
+        status_label=new_status,
+        detail_note=f"Address/jurisdiction updated to {resolved['district_name']}",
+    )
+    return _fetch_complaint_by_id_unscoped(complaint_id, now=now_dt)
+
+
+def _fetch_complaint_by_id_unscoped(complaint_id: int, now: datetime | None = None) -> dict:
+    with closing(_db.get_connection()) as conn:
+        row = conn.execute(_BASE_SELECT + " WHERE c.id = ? AND c.is_deleted = 0", (int(complaint_id),)).fetchone()
+    cnt = get_image_counts_map([int(complaint_id)]).get(int(complaint_id), 0)
+    return _row_to_complaint(row, photo_count=cnt, now=now)
 
 
 def add_internal_note(actor: dict | None, complaint_id: int, note: str) -> dict:

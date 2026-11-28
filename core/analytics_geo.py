@@ -16,33 +16,52 @@ from core.permissions import require
 def filter_complaints_by_location(
     complaints: list[dict],
     *,
+    country_id: int | None = None,
+    state_id: int | None = None,
     district_id: int | None = None,
     mandal_id: int | None = None,
+    town_village_id: int | None = None,
+    area_id: int | None = None,
     pincode: str | None = None,
+    digipin_flagged_only: bool = False,
 ) -> list[dict]:
-    """Filter role-scoped complaint dicts by district, optional mandal, and/or pincode."""
+    """Filter role-scoped complaint dicts by full address hierarchy, pincode, and DIGIPIN flag."""
     out = complaints
+    if country_id is not None:
+        out = [c for c in out if c.get("country_id") == int(country_id)]
+    if state_id is not None:
+        out = [c for c in out if c.get("state_id") == int(state_id)]
     if district_id is not None:
         out = [c for c in out if c.get("district_id") == int(district_id)]
     if mandal_id is not None:
         out = [c for c in out if c.get("mandal_id") == int(mandal_id)]
+    if town_village_id is not None:
+        out = [c for c in out if c.get("town_village_id") == int(town_village_id)]
+    if area_id is not None:
+        out = [c for c in out if c.get("area_id") == int(area_id)]
     pin = str(pincode or "").strip()
     if pin:
         out = [c for c in out if str(c.get("pincode") or "").strip() == pin]
+    if digipin_flagged_only:
+        out = [c for c in out if bool(c.get("digipin_flagged"))]
     return out
 
 
 def extract_map_points(complaints: list[dict]) -> list[dict]:
     """
-    Return mappable points using explicit coordinates when available,
-    otherwise falling back to the India Post area centroid already merged into latitude/longitude.
+    Return mappable points for staff hotspot visualizations using stored coordinates:
+    DIGIPIN decode -> area centroid -> district centroid (never citizen map-pin).
     """
+    prio_w = {"High": 3.0, "Medium": 2.0, "Low": 1.0}
     points = []
     for c in complaints:
         lat = c.get("latitude")
         lon = c.get("longitude")
         if lat is None or lon is None:
             continue
+        src = c.get("coord_source") or (
+            "digipin" if c.get("digipin_lat") is not None else "area_centroid"
+        )
         points.append({
             "incident_id": c.get("incident_id"),
             "department": c.get("department"),
@@ -51,6 +70,11 @@ def extract_map_points(complaints: list[dict]) -> list[dict]:
             "district": c.get("district_name") or "",
             "area": c.get("area_name") or "",
             "pincode": c.get("pincode") or "",
+            "source": src,
+            "is_centroid": src in ("area_centroid", "district_centroid"),
+            "weight": prio_w.get(c.get("priority"), 1.0),
+            "lat": float(lat),
+            "lon": float(lon),
             "latitude": float(lat),
             "longitude": float(lon),
         })

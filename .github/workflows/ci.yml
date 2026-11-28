@@ -25,10 +25,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Lint with Ruff
-        run: ruff check core nlp ml analytics notifications ui scripts tests app.py
+        run: ruff check geo core nlp ml analytics notifications ui scripts tests app.py
 
       - name: Syntax check all Python files
-        run: python -m compileall -q core nlp ml analytics notifications ui scripts tests app.py
+        run: python -m compileall -q geo core nlp ml analytics notifications ui scripts tests app.py
 
       - name: Run full unit and security test suite
         env:

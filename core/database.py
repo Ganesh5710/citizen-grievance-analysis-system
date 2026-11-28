@@ -198,17 +198,27 @@ CREATE TABLE IF NOT EXISTS wards (
     polygon TEXT DEFAULT ''
 );
 
-CREATE TABLE IF NOT EXISTS states (
+CREATE TABLE IF NOT EXISTS countries (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     name      TEXT UNIQUE NOT NULL,
     code      TEXT DEFAULT '',
     is_active INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS states (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    country_id INTEGER REFERENCES countries(id),
+    name       TEXT UNIQUE NOT NULL,
+    code       TEXT DEFAULT '',
+    is_active  INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS districts (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     state_id         INTEGER NOT NULL REFERENCES states(id),
     name             TEXT NOT NULL,
+    latitude         REAL,
+    longitude        REAL,
     is_active        INTEGER NOT NULL DEFAULT 1,
     allow_self_claim INTEGER NOT NULL DEFAULT 0,
     UNIQUE(state_id, name)
@@ -222,14 +232,27 @@ CREATE TABLE IF NOT EXISTS mandals (
     UNIQUE(district_id, name)
 );
 
-CREATE TABLE IF NOT EXISTS areas (
+CREATE TABLE IF NOT EXISTS towns_villages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     district_id INTEGER NOT NULL REFERENCES districts(id),
     mandal_id   INTEGER REFERENCES mandals(id),
     name        TEXT NOT NULL,
-    latitude    REAL,
-    longitude   REAL,
+    lgd_code    TEXT DEFAULT '',
+    pincode     TEXT DEFAULT '',
+    category    TEXT DEFAULT '',
     is_active   INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(district_id, mandal_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS areas (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    district_id     INTEGER NOT NULL REFERENCES districts(id),
+    mandal_id       INTEGER REFERENCES mandals(id),
+    town_village_id INTEGER REFERENCES towns_villages(id),
+    name            TEXT NOT NULL,
+    latitude        REAL,
+    longitude       REAL,
+    is_active       INTEGER NOT NULL DEFAULT 1,
     UNIQUE(district_id, name)
 );
 
@@ -324,11 +347,21 @@ CREATE TABLE IF NOT EXISTS complaints (
     location         TEXT NOT NULL DEFAULT '',
     department_id    INTEGER NOT NULL REFERENCES departments(id),
     ward_id          INTEGER REFERENCES wards(id),
+    country_id       INTEGER REFERENCES countries(id),
     state_id         INTEGER REFERENCES states(id),
     district_id      INTEGER REFERENCES districts(id),
     mandal_id        INTEGER REFERENCES mandals(id),
+    town_village_id  INTEGER REFERENCES towns_villages(id),
     area_id          INTEGER REFERENCES areas(id),
     pincode          TEXT DEFAULT '',
+    house_no         TEXT DEFAULT '',
+    street           TEXT DEFAULT '',
+    landmark         TEXT DEFAULT '',
+    digipin          TEXT DEFAULT '',
+    digipin_lat      REAL,
+    digipin_lon      REAL,
+    digipin_flagged  INTEGER NOT NULL DEFAULT 0,
+    formatted_address TEXT DEFAULT '',
     latitude         REAL,
     longitude        REAL,
     priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
@@ -494,11 +527,16 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS location_load_logs (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     source_path          TEXT NOT NULL,
+    source_dataset       TEXT DEFAULT '',
+    source_download_date TEXT DEFAULT '',
     default_state        TEXT NOT NULL,
     total_rows           INTEGER NOT NULL DEFAULT 0,
+    loaded_mandals       INTEGER NOT NULL DEFAULT 0,
+    loaded_towns_villages INTEGER NOT NULL DEFAULT 0,
     loaded_areas         INTEGER NOT NULL DEFAULT 0,
     loaded_pincodes      INTEGER NOT NULL DEFAULT 0,
     skipped_rows         INTEGER NOT NULL DEFAULT 0,
+    skipped_reasons_json TEXT DEFAULT '{}',
     mandal_level_present INTEGER NOT NULL DEFAULT 0,
     notes                TEXT DEFAULT '',
     loaded_at            TEXT DEFAULT (datetime('now'))
@@ -928,6 +966,82 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE complaints_new RENAME TO complaints")
 
 
+def _backfill_structured_locations_in_conn(conn: sqlite3.Connection) -> None:
+    """Backfill district centroids, complaint country_id, and formatted_address for pre-existing rows."""
+    conn.execute(
+        """
+        UPDATE districts
+        SET latitude = (
+                SELECT AVG(a.latitude) FROM areas a
+                WHERE a.district_id = districts.id AND a.latitude IS NOT NULL
+            ),
+            longitude = (
+                SELECT AVG(a.longitude) FROM areas a
+                WHERE a.district_id = districts.id AND a.longitude IS NOT NULL
+            )
+        WHERE latitude IS NULL OR longitude IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE complaints
+        SET country_id = COALESCE(
+            (SELECT s.country_id FROM states s WHERE s.id = complaints.state_id),
+            1
+        )
+        WHERE country_id IS NULL
+          AND (state_id IS NOT NULL OR district_id IS NOT NULL OR area_id IS NOT NULL)
+        """
+    )
+
+    rows = conn.execute(
+        """
+        SELECT c.id, c.location, c.house_no, c.street, c.landmark, c.pincode, c.digipin,
+               ar.name AS area_name, tv.name AS tv_name, m.name AS mandal_name,
+               d.name AS district_name, s.name AS state_name, co.name AS country_name
+        FROM complaints c
+        LEFT JOIN areas ar ON ar.id = c.area_id
+        LEFT JOIN towns_villages tv ON tv.id = c.town_village_id
+        LEFT JOIN mandals m ON m.id = c.mandal_id
+        LEFT JOIN districts d ON d.id = c.district_id
+        LEFT JOIN states s ON s.id = c.state_id
+        LEFT JOIN countries co ON co.id = c.country_id
+        WHERE COALESCE(c.formatted_address, '') = ''
+        """
+    ).fetchall()
+
+    for r in rows:
+        parts = []
+        for val in (r["house_no"], r["street"], r["landmark"]):
+            v = str(val or "").strip()
+            if v and v not in parts:
+                parts.append(v)
+        if not parts and str(r["location"] or "").strip():
+            parts.append(str(r["location"]).strip())
+        for val in (r["area_name"], r["tv_name"], r["mandal_name"], r["district_name"]):
+            v = str(val or "").strip()
+            if v and v not in parts:
+                parts.append(v)
+        state_str = str(r["state_name"] or "").strip()
+        pin_str = str(r["pincode"] or "").strip()
+        if state_str and pin_str:
+            parts.append(f"{state_str} - {pin_str}")
+        elif state_str:
+            parts.append(state_str)
+        elif pin_str:
+            parts.append(pin_str)
+        c_str = str(r["country_name"] or "").strip()
+        if c_str:
+            parts.append(c_str)
+        if str(r["digipin"] or "").strip():
+            parts.append(f"DIGIPIN: {str(r['digipin']).strip()}")
+        fmt = ", ".join(parts) if parts else "Address not specified"
+        conn.execute(
+            "UPDATE complaints SET formatted_address = ? WHERE id = ?",
+            (fmt, r["id"]),
+        )
+
+
 def init_db() -> None:
     """Create all tables and run schema migrations idempotently."""
     db_path = get_db_path()
@@ -975,18 +1089,58 @@ def init_db() -> None:
             _migrate_complaints(conn)
             _migrate_complaint_updates(conn)
             conn.executescript(_SCHEMA_SQL)
+            conn.execute(
+                "INSERT OR IGNORE INTO countries (id, name, code, is_active) VALUES (1, 'India', 'IN', 1)"
+            )
+            st_cols = _table_columns(conn, "states")
+            if st_cols and "country_id" not in st_cols:
+                conn.execute("ALTER TABLE states ADD COLUMN country_id INTEGER REFERENCES countries(id)")
+            conn.execute("UPDATE states SET country_id = 1 WHERE country_id IS NULL")
+
             d_cols = _table_columns(conn, "districts")
             if d_cols and "allow_self_claim" not in d_cols:
                 conn.execute(
                     "ALTER TABLE districts ADD COLUMN allow_self_claim INTEGER NOT NULL DEFAULT 0"
                 )
+            for col_name, col_def in (("latitude", "REAL"), ("longitude", "REAL")):
+                if d_cols and col_name not in d_cols:
+                    conn.execute(f"ALTER TABLE districts ADD COLUMN {col_name} {col_def}")
+
+            a_cols = _table_columns(conn, "areas")
+            if a_cols and "town_village_id" not in a_cols:
+                conn.execute(
+                    "ALTER TABLE areas ADD COLUMN town_village_id INTEGER REFERENCES towns_villages(id)"
+                )
+
+            ll_cols = _table_columns(conn, "location_load_logs")
+            if ll_cols:
+                for col_name, col_def in (
+                    ("source_dataset", "TEXT DEFAULT ''"),
+                    ("source_download_date", "TEXT DEFAULT ''"),
+                    ("loaded_mandals", "INTEGER NOT NULL DEFAULT 0"),
+                    ("loaded_towns_villages", "INTEGER NOT NULL DEFAULT 0"),
+                    ("skipped_reasons_json", "TEXT DEFAULT '{}'"),
+                ):
+                    if col_name not in ll_cols:
+                        conn.execute(f"ALTER TABLE location_load_logs ADD COLUMN {col_name} {col_def}")
+
             c_cols = _table_columns(conn, "complaints")
             for col_name, col_def in (
+                ("country_id", "INTEGER REFERENCES countries(id)"),
                 ("state_id", "INTEGER REFERENCES states(id)"),
                 ("district_id", "INTEGER REFERENCES districts(id)"),
                 ("mandal_id", "INTEGER REFERENCES mandals(id)"),
+                ("town_village_id", "INTEGER REFERENCES towns_villages(id)"),
                 ("area_id", "INTEGER REFERENCES areas(id)"),
                 ("pincode", "TEXT DEFAULT ''"),
+                ("house_no", "TEXT DEFAULT ''"),
+                ("street", "TEXT DEFAULT ''"),
+                ("landmark", "TEXT DEFAULT ''"),
+                ("digipin", "TEXT DEFAULT ''"),
+                ("digipin_lat", "REAL"),
+                ("digipin_lon", "REAL"),
+                ("digipin_flagged", "INTEGER NOT NULL DEFAULT 0"),
+                ("formatted_address", "TEXT DEFAULT ''"),
                 ("assigned_by", "INTEGER REFERENCES users(id)"),
                 ("accepted_at", "TEXT"),
                 ("assignment_instructions", "TEXT DEFAULT ''"),
@@ -1029,6 +1183,7 @@ def init_db() -> None:
             _seed_departments_in_conn(conn)
             _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
+            _backfill_structured_locations_in_conn(conn)
             conn.executescript(
                 """
                 CREATE INDEX IF NOT EXISTS idx_complaints_scope_created
@@ -1041,6 +1196,10 @@ def init_db() -> None:
                     ON complaint_updates(complaint_id, id);
                 CREATE INDEX IF NOT EXISTS idx_notifs_user_chan_read
                     ON notifications(user_id, channel, is_read, id);
+                CREATE INDEX IF NOT EXISTS idx_tv_dist_mandal
+                    ON towns_villages(district_id, mandal_id, is_active);
+                CREATE INDEX IF NOT EXISTS idx_complaints_digipin
+                    ON complaints(digipin);
                 """
             )
         conn.execute("PRAGMA foreign_keys = ON")

@@ -1058,20 +1058,28 @@ def _render_locations_tab(user: dict) -> None:
         "(official data.gov.in India Post pincode directory)."
     )
 
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("States", stats["states"])
-    k2.metric("Districts", stats["districts"])
-    k3.metric("Mandals", stats["mandals"])
-    k4.metric("Areas / Post Offices", stats["areas"])
-    k5.metric("Pincode Mappings", stats["pincodes"])
+    k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
+    k1.metric("Countries", stats.get("countries", 1))
+    k2.metric("States", stats["states"])
+    k3.metric("Districts", stats["districts"])
+    k4.metric("Mandals", stats["mandals"])
+    k5.metric("Towns / Villages", stats.get("towns_villages", 0))
+    k6.metric("Areas / POs", stats["areas"])
+    k7.metric("Pincodes", stats["pincodes"])
 
-    if st.button("Reload Official Location CSV", key="sa_reload_loc_btn", type="primary"):
+    if st.button("Reload Official India Post & LGD Data", key="sa_reload_loc_btn", type="primary"):
         try:
             summary = reload_locations_admin(user)
+            lgd_part = ""
+            if summary.get("lgd"):
+                lgd = summary["lgd"]
+                lgd_part = (
+                    f" | LGD: {lgd['loaded_mandals']} mandals, "
+                    f"{lgd['loaded_towns_villages']} towns/villages, {lgd['skipped_rows']} skipped"
+                )
             st.session_state["sa_loc_flash"] = (
-                f"Location load completed: {summary['loaded_districts']} districts added, "
-                f"{summary['loaded_areas']} areas added, {summary['loaded_pincodes']} pincodes added, "
-                f"{summary['skipped_rows']} rows skipped."
+                f"India Post: {summary['loaded_districts']} districts, {summary['loaded_areas']} areas, "
+                f"{summary['loaded_pincodes']} pincodes added ({summary['skipped_rows']} skipped){lgd_part}."
             )
             st.rerun()
         except Exception as exc:
