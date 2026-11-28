@@ -167,6 +167,27 @@ CREATE TABLE IF NOT EXISTS sla_policies (
     UNIQUE(department_id, priority)
 );
 
+CREATE TABLE IF NOT EXISTS incident_groups (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    title                TEXT NOT NULL DEFAULT '',
+    department_id        INTEGER NOT NULL REFERENCES departments(id),
+    district_id          INTEGER REFERENCES districts(id),
+    primary_complaint_id INTEGER,
+    member_count         INTEGER NOT NULL DEFAULT 1,
+    support_count        INTEGER NOT NULL DEFAULT 0,
+    status               TEXT NOT NULL DEFAULT 'Open',
+    created_at           TEXT DEFAULT (datetime('now')),
+    updated_at           TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS complaint_supports (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    complaint_id INTEGER NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+    user_id      INTEGER NOT NULL REFERENCES users(id),
+    created_at   TEXT DEFAULT (datetime('now')),
+    UNIQUE(complaint_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS complaints (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     incident_id      TEXT UNIQUE NOT NULL,
@@ -205,6 +226,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     duration_confidence     REAL,
     is_recurring            INTEGER NOT NULL DEFAULT 0,
     priority_reason         TEXT DEFAULT '',
+    incident_group_id       INTEGER REFERENCES incident_groups(id),
     created_at              TEXT DEFAULT (datetime('now')),
     updated_at              TEXT DEFAULT (datetime('now'))
 );
@@ -788,6 +810,7 @@ def init_db() -> None:
                 ("duration_confidence", "REAL"),
                 ("is_recurring", "INTEGER NOT NULL DEFAULT 0"),
                 ("priority_reason", "TEXT DEFAULT ''"),
+                ("incident_group_id", "INTEGER REFERENCES incident_groups(id)"),
             ):
                 if col_name not in c_cols:
                     conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")

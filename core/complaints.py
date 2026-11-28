@@ -9,6 +9,7 @@ import json
 import uuid
 
 from core.classifier import classify
+from core.clusters import resolve_group_on_primary_resolution_in_conn
 from core.config import get_env_float
 import core.database as _db
 from core.images import (
@@ -188,6 +189,10 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "duration_confidence":  row["duration_confidence"],
         "is_recurring":         bool(row["is_recurring"] or 0),
         "priority_reason":      row["priority_reason"] or "",
+        "incident_group_id":    row["incident_group_id"],
+        "cluster_member_count": int(row["cluster_member_count"] or 1),
+        "cluster_support_count": int(row["cluster_support_count"] or 0),
+        "report_count":         int(row["cluster_member_count"] or 1) + int(row["cluster_support_count"] or 0),
         "district_allow_self_claim": bool(row["district_allow_self_claim"] or 0),
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
@@ -244,6 +249,11 @@ SELECT c.id,
        c.duration_confidence,
        c.is_recurring,
        c.priority_reason,
+       c.incident_group_id,
+       COALESCE(ig.member_count, 1) AS cluster_member_count,
+       COALESCE(ig.support_count, (
+           SELECT COUNT(*) FROM complaint_supports cs WHERE cs.complaint_id = c.id
+       )) AS cluster_support_count,
        c.is_deleted,
        c.created_at,
        c.updated_at
@@ -255,6 +265,7 @@ LEFT JOIN states st ON st.id = c.state_id
 LEFT JOIN districts dist ON dist.id = c.district_id
 LEFT JOIN mandals mnd ON mnd.id = c.mandal_id
 LEFT JOIN areas ar ON ar.id = c.area_id
+LEFT JOIN incident_groups ig ON ig.id = c.incident_group_id
 LEFT JOIN users emp ON emp.id = c.assigned_to
 LEFT JOIN users adm_by ON adm_by.id = c.assigned_by
 """
@@ -1279,6 +1290,11 @@ def update_complaint(
                 )
             save_prepared_images_in_conn(
                 conn, user, complaint_id, target_status, prepared_after, now=now_str, photo_stage="after"
+            )
+
+        if target_status == "Resolved" and old_status != "Resolved":
+            resolve_group_on_primary_resolution_in_conn(
+                conn, complaint_id, effective_reason, now_str
             )
 
 

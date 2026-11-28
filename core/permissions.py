@@ -16,6 +16,7 @@ PERMISSIONS: dict[str, set[str]] = {
     "edit_complaint_fields": {"admin", "super_admin"},
     "assign_complaint":      {"admin", "super_admin"},
     "assign_task":           {"admin", "super_admin"},
+    "merge_complaints":      {"admin", "super_admin"},
     "remove_image":          {"admin", "super_admin"},
     "view_review_queue":     {"admin", "super_admin"},
     "resolve_review_item":   {"admin", "super_admin"},

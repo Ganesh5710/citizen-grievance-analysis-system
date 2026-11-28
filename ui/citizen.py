@@ -10,6 +10,7 @@ import html
 
 import streamlit as st
 
+from core.clusters import find_similar_open_complaints, support_complaint
 from core.complaints import (
     get_complaint_detail,
     get_complaint_feedback,
@@ -320,6 +321,39 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
             return
 
         try:
+            sim_res = find_similar_open_complaints(
+                dept["id"],
+                text_stripped,
+                latitude=chosen_lat,
+                longitude=chosen_lon,
+                pincode=sel_pincode or None,
+                state_id=sel_state_id,
+                district_id=sel_district_id,
+                mandal_id=sel_mandal_id,
+                area_id=sel_area_id,
+            )
+            matches = sim_res.get("matches", [])
+            if matches:
+                st.session_state["citizen_dup_check"] = {
+                    "dept_id": dept["id"],
+                    "dept_name": dept["name"],
+                    "text": text_stripped,
+                    "location": loc_stripped,
+                    "files": [
+                        (f.name, f.getvalue()) for f in (uploaded_files or [])
+                    ],
+                    "latitude": chosen_lat,
+                    "longitude": chosen_lon,
+                    "pincode": sel_pincode or None,
+                    "state_id": sel_state_id,
+                    "district_id": sel_district_id,
+                    "mandal_id": sel_mandal_id,
+                    "area_id": sel_area_id,
+                    "matches": matches,
+                    "method": sim_res.get("method", "tfidf_fallback"),
+                }
+                st.rerun()
+
             incident_id = submit_complaint(
                 user,
                 dept["id"],
@@ -363,6 +397,79 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
             st.error(f"Validation error: {exc}")
         except Exception as exc:
             st.error(f"Unexpected error: {exc}")
+
+    dup_ctx = st.session_state.get("citizen_dup_check")
+    if dup_ctx and dup_ctx.get("dept_id") == dept["id"]:
+        n_sim = len(dup_ctx["matches"])
+        st.warning(
+            f"{n_sim} similar open complaint(s) found nearby (detector: {dup_ctx['method']}). "
+            "You can support an existing issue instead of filing a duplicate, or continue anyway."
+        )
+        for m in dup_ctx["matches"][:5]:
+            mc1, mc2 = st.columns([4, 1], vertical_alignment="center")
+            with mc1:
+                st.markdown(
+                    f"**#{m['incident_id']}** ({m['status']}, Priority: {m['priority']}, "
+                    f"{m['distance_m']} m away, sim {int(m['similarity'] * 100)}%, "
+                    f"Reports: {m['report_count']})  \n{m['text_preview']}"
+                )
+            with mc2:
+                can_sup = int(m["user_id"]) != int(user["id"])
+                if st.button(
+                    "Support Existing",
+                    key=f"citizen_sup_btn_{m['complaint_id']}_{form_gen}",
+                    disabled=not can_sup,
+                    width="stretch",
+                ):
+                    try:
+                        sup_res = support_complaint(user, m["complaint_id"])
+                        st.session_state.pop("citizen_dup_check", None)
+                        st.session_state["citizen_last_ticket"] = {
+                            "incident_id": m["incident_id"],
+                            "department": dept["name"],
+                            "priority": m["priority"],
+                            "ml_hint": f" Supported existing cluster (total reports: {sup_res.get('report_count', 1)}).",
+                        }
+                        st.session_state.pop("citizen_selected_dept_id", None)
+                        st.session_state["citizen_form_gen"] = form_gen + 1
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))
+
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("Continue Submitting as New Complaint", key=f"citizen_force_new_{form_gen}", type="primary"):
+                try:
+                    incident_id = submit_complaint(
+                        user,
+                        dup_ctx["dept_id"],
+                        dup_ctx["text"],
+                        dup_ctx["location"],
+                        files=dup_ctx["files"] or None,
+                        latitude=dup_ctx["latitude"],
+                        longitude=dup_ctx["longitude"],
+                        pincode=dup_ctx["pincode"],
+                        state_id=dup_ctx["state_id"],
+                        district_id=dup_ctx["district_id"],
+                        mandal_id=dup_ctx["mandal_id"],
+                        area_id=dup_ctx["area_id"],
+                    )
+                    st.session_state.pop("citizen_dup_check", None)
+                    st.session_state["citizen_last_ticket"] = {
+                        "incident_id": incident_id,
+                        "department": dept["name"],
+                        "priority": "Awaiting Assignment",
+                        "ml_hint": "",
+                    }
+                    st.session_state.pop("citizen_selected_dept_id", None)
+                    st.session_state["citizen_form_gen"] = form_gen + 1
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+        with cc2:
+            if st.button("Cancel / Edit Description", key=f"citizen_cancel_dup_{form_gen}"):
+                st.session_state.pop("citizen_dup_check", None)
+                st.rerun()
 
 
 def _render_citizen_feedback_section(user: dict, detail: dict) -> None:

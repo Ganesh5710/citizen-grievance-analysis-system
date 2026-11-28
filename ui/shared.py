@@ -12,6 +12,7 @@ import plotly.express as px
 import streamlit as st
 
 from core.analytics_geo import extract_map_points, filter_complaints_by_location
+from core.clusters import get_cluster_info, merge_complaints, unmerge_complaint
 from core.complaints import (
     VALID_PRIORITIES,
     VALID_STATUSES,
@@ -247,8 +248,13 @@ def render_complaint_card(detail: dict) -> None:
     text_esc = html.escape(str(detail.get("text", "")))
     reopen_count = int(detail.get("reopen_count", 0))
     esc_level = int(detail.get("escalation_level", 0))
+    rep_cnt = int(detail.get("report_count", 1) or 1)
+    grp_id = detail.get("incident_group_id")
 
     extra_badges = ""
+    if grp_id or rep_cnt > 1:
+        g_lbl = f"Cluster #G{grp_id} | " if grp_id else ""
+        extra_badges += f' <span class="cgs-badge cgs-badge-primary">{html.escape(g_lbl)}Reports: {rep_cnt}</span>'
     if detail.get("is_overdue"):
         extra_badges += f' <span class="cgs-badge cgs-badge-danger">Overdue ({detail.get("overdue_hours", 0)}h)</span>'
     if esc_level > 0:
@@ -704,6 +710,69 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                     st.error(f"Validation error: {exc}")
                 except Exception as exc:
                     st.error(f"Unexpected error: {exc}")
+
+    # Incident Cluster Merge / Unmerge (Admin in jurisdiction & Super Admin)
+    if can(user, "merge_complaints"):
+        st.markdown("---")
+        with st.expander(f"Incident Cluster & Duplicate Merge (#{detail['incident_id']})"):
+            cinfo = get_cluster_info(detail["id"])
+            st.caption(
+                f"Cluster report count: {cinfo['report_count']} "
+                f"(Linked members: {len(cinfo['members'])}, Citizen supports: {cinfo['support_count']})"
+            )
+            if len(cinfo["members"]) > 1:
+                st.write(
+                    "Linked members: " + ", ".join(f"#{m['incident_id']} ({m['status']})" for m in cinfo["members"])
+                )
+            same_scope = [
+                c for c in get_complaints(user)
+                if c["id"] != detail["id"]
+                and c["department_id"] == detail["department_id"]
+                and c.get("status") not in ("Resolved", "Closed")
+            ]
+            version_cl = f"{detail['id']}_{detail['updated_at']}_{detail.get('incident_group_id')}"
+            if same_scope:
+                cand_opts = [c["id"] for c in same_scope]
+                cand_lbls = {
+                    c["id"]: f"#{c['incident_id']} ({c['status']}, {c['district_name'] or '-'}) - {c['text'][:60]}"
+                    for c in same_scope
+                }
+                dup_cid = st.selectbox(
+                    "Select Duplicate Complaint to Merge INTO This Primary Complaint",
+                    options=cand_opts,
+                    format_func=lambda cid: cand_lbls[cid],
+                    key=f"{key_prefix}_merge_sel_{version_cl}",
+                )
+                merge_reason = st.text_input(
+                    "Merge Reason (required, min 5 chars)",
+                    key=f"{key_prefix}_merge_reason_{version_cl}",
+                    placeholder="e.g. Same broken water valve within 100m",
+                )
+                if st.button("Merge Duplicate Into This Primary", key=f"{key_prefix}_merge_btn_{version_cl}"):
+                    try:
+                        res_m = merge_complaints(user, detail["id"], dup_cid, merge_reason.strip())
+                        st.session_state[flash_key] = (
+                            f"Merged into cluster #G{res_m['group_id']} (Total reports: {res_m['report_count']})."
+                        )
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))
+            else:
+                st.caption("No other open same-department complaints available in scope to merge.")
+
+            if detail.get("incident_group_id") is not None:
+                unm_reason = st.text_input(
+                    "Unmerge Reason (required, min 5 chars)",
+                    key=f"{key_prefix}_unmerge_reason_{version_cl}",
+                    placeholder="e.g. Distinct feeder line issue",
+                )
+                if st.button("Unmerge This Complaint from Cluster", key=f"{key_prefix}_unmerge_btn_{version_cl}"):
+                    try:
+                        unmerge_complaint(user, detail["id"], unm_reason.strip())
+                        st.session_state[flash_key] = f"Unmerged #{detail['incident_id']} from cluster."
+                        st.rerun()
+                    except (PermissionError, ValueError) as exc:
+                        st.error(str(exc))
 
     # Soft delete (Super Admin only)
     if can(user, "delete_complaint"):
