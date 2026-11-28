@@ -7,7 +7,9 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import re
 import sqlite3
+from typing import Any
 
 from core.config import get_env_str
 from core.logging_setup import get_logger
@@ -16,15 +18,72 @@ from core.security import generate_temp_password, hash_password
 _logger = get_logger("database")
 
 # ---------------------------------------------------------------------------
-# Path
+# Path & DATABASE_URL abstraction
 # ---------------------------------------------------------------------------
 DEFAULT_DB_PATH: Path = Path(__file__).parent.parent / "complaints.db"
 
 
+def get_database_url() -> str:
+    """Return configured DATABASE_URL, defaulting to local SQLite file path."""
+    override_path = os.environ.get("CGS_DB_PATH")
+    if override_path:
+        return f"sqlite:///{override_path}"
+    env_url = os.environ.get("DATABASE_URL", "").strip()
+    if env_url:
+        return env_url
+    return f"sqlite:///{DEFAULT_DB_PATH}"
+
+
+def get_database_backend(url: str | None = None) -> str:
+    """Return 'postgres' for postgresql:// / postgres:// URLs, else 'sqlite'."""
+    u = (url if url is not None else get_database_url()).strip().lower()
+    if u.startswith(("postgresql://", "postgres://", "postgresql+")):
+        return "postgres"
+    return "sqlite"
+
+
 def get_db_path() -> Path:
-    """Resolve DB path dynamically (honors CGS_DB_PATH for test isolation)."""
+    """Resolve SQLite DB path dynamically (honors CGS_DB_PATH and sqlite:/// URLs)."""
     override = os.environ.get("CGS_DB_PATH")
-    return Path(override) if override else DEFAULT_DB_PATH
+    if override:
+        return Path(override)
+    env_url = os.environ.get("DATABASE_URL", "").strip()
+    if env_url.lower().startswith("sqlite:///"):
+        return Path(env_url[len("sqlite:///"):])
+    return DEFAULT_DB_PATH
+
+
+def translate_sql_placeholders(sql: str, params: tuple | list = ()) -> tuple[str, dict[str, Any]]:
+    """Convert sqlite '?' positional placeholders to SQLAlchemy ':p0, :p1, ...' named parameters."""
+    idx = 0
+    param_map: dict[str, Any] = {}
+    out: list[str] = []
+    in_single = False
+    for ch in sql:
+        if ch == "'":
+            in_single = not in_single
+            out.append(ch)
+        elif ch == "?" and not in_single:
+            key = f"p{idx}"
+            out.append(f":{key}")
+            param_map[key] = params[idx] if idx < len(params) else None
+            idx += 1
+        else:
+            out.append(ch)
+    return "".join(out), param_map
+
+
+def translate_sqlite_ddl_for_postgres(ddl: str) -> str:
+    """Convert core SQLite DDL constructs into PostgreSQL-compatible DDL."""
+    out = re.sub(
+        r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
+        "SERIAL PRIMARY KEY",
+        ddl,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(r"\bdatetime\s*\(\s*'now'\s*\)", "CURRENT_TIMESTAMP", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bREAL\b", "DOUBLE PRECISION", out, flags=re.IGNORECASE)
+    return out
 
 
 def utc_now_str(now: datetime | None = None) -> str:
@@ -44,8 +103,72 @@ DB_PATH: Path = get_db_path()
 # ---------------------------------------------------------------------------
 
 
-def get_connection() -> sqlite3.Connection:
-    """Return an open SQLite connection with WAL mode, busy_timeout, row_factory, and FK enforcement."""
+class _PgCursorProxy:
+    """Minimal DB-API cursor shim around SQLAlchemy Result for unified callers."""
+
+    def __init__(self, result: Any):
+        self._result = result
+        self.lastrowid = getattr(result, "lastrowid", None)
+        self.rowcount = result.rowcount
+
+    def fetchone(self):
+        r = self._result.mappings().first()
+        return dict(r) if r is not None else None
+
+    def fetchall(self):
+        return [dict(r) for r in self._result.mappings().all()]
+
+
+class PostgresConnectionAdapter:
+    """
+    Unified DB connection adapter wrapping SQLAlchemy Core when DATABASE_URL
+    points to PostgreSQL. Translates '?' positional placeholders cleanly.
+    """
+
+    def __init__(self, url: str):
+        try:
+            from sqlalchemy import create_engine, text  # noqa: WPS433
+        except ImportError as exc:
+            raise RuntimeError("SQLAlchemy + psycopg driver required for PostgreSQL DATABASE_URL.") from exc
+        self._text = text
+        self._engine = create_engine(url, pool_pre_ping=True, future=True)
+        self._conn = self._engine.connect()
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        if sql.strip().upper().startswith("PRAGMA"):
+            return _PgCursorProxy(self._conn.execute(self._text("SELECT 1")))
+        pg_sql, bound = translate_sql_placeholders(sql, params)
+        return _PgCursorProxy(self._conn.execute(self._text(pg_sql), bound))
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+        self._engine.dispose()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+
+
+def get_connection() -> sqlite3.Connection | PostgresConnectionAdapter:
+    """
+    Return a database connection according to DATABASE_URL (SQLite default or PostgreSQL).
+    SQLite enables WAL mode, busy_timeout, Row factory, and FK enforcement.
+    """
+    url = get_database_url()
+    if get_database_backend(url) == "postgres":
+        return PostgresConnectionAdapter(url)
+
     conn = sqlite3.connect(str(get_db_path()), timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
@@ -906,6 +1029,20 @@ def init_db() -> None:
             _seed_departments_in_conn(conn)
             _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
+            conn.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_complaints_scope_created
+                    ON complaints(is_deleted, district_id, department_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_complaints_assigned_status
+                    ON complaints(is_deleted, assigned_to, status);
+                CREATE INDEX IF NOT EXISTS idx_complaints_user_created
+                    ON complaints(user_id, is_deleted, created_at);
+                CREATE INDEX IF NOT EXISTS idx_updates_complaint_id
+                    ON complaint_updates(complaint_id, id);
+                CREATE INDEX IF NOT EXISTS idx_notifs_user_chan_read
+                    ON notifications(user_id, channel, is_read, id);
+                """
+            )
         conn.execute("PRAGMA foreign_keys = ON")
     finally:
         conn.close()

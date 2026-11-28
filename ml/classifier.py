@@ -15,7 +15,7 @@ from typing import Any
 import joblib
 import numpy as np
 
-from core.classifier import HIGH_KEYWORDS, MEDIUM_KEYWORDS
+from core.classifier import HIGH_KEYWORDS
 from core.classifier import classify as rule_classify
 from core.config import PROJECT_ROOT, get_env_float, get_env_str
 from core.logging_setup import get_logger

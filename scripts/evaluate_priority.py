@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import numpy as np
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -125,7 +124,7 @@ def _eval_bundle_on_gold(bundle_path: Path, cases: list[dict[str, Any]]) -> dict
     for c in ambiguous_cases:
         info = analyze_duration_and_recurrence(c["text"])
         exp_h = c["expected_duration_hours"]
-        dur_ok = got_h = info["hours"]
+        got_h = info["hours"]
         is_ok = (got_h is not None and exp_h is not None and abs(float(got_h) - float(exp_h)) <= 0.15)
         if is_ok:
             amb_dur_ok += 1

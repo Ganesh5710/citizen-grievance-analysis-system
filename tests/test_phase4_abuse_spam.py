@@ -231,7 +231,9 @@ class TestPhase4AbuseAndSpam(unittest.TestCase):
         )
         self.assertIsNotNone(self._get_by_inc(inc_after))
         logs = mod_mod.get_moderation_audit_logs(self.sa)
-        self.assertTrue(any(l["action"] == "lift_spam_block" and l["target_user_id"] == cit_sp["id"] for l in logs))
+        self.assertTrue(
+            any(log_entry["action"] == "lift_spam_block" and log_entry["target_user_id"] == cit_sp["id"] for log_entry in logs)
+        )
 
         # Captcha challenge helper check
         q, ans = mod_mod.generate_captcha_challenge()

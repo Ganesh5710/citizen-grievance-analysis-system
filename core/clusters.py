@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import datetime, timezone
-import math
 import threading
 from typing import Any
 

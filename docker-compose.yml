@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    container_name: citizen-grievance-app
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - CGS_DB_PATH=/app/data/complaints.db
+      - CGS_UPLOADS_DIR=/app/uploads
+      - CGS_LOG_DIR=/app/logs
+      - CGS_BACKUP_DIR=/app/backups
+    volumes:
+      - cgs_data:/app/data
+      - cgs_uploads:/app/uploads
+      - cgs_logs:/app/logs
+      - cgs_backups:/app/backups
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: citizen-grievance-pg
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: cgs
+      POSTGRES_USER: cgs_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_pg_password}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  cgs_data:
+  cgs_uploads:
+  cgs_logs:
+  cgs_backups:
+  pg_data:

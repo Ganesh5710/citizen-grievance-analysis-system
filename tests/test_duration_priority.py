@@ -17,7 +17,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -513,10 +513,10 @@ class TestHierarchyAndJurisdiction(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                l["incident_id"] == c_ovr["incident_id"]
-                and l["source"] == "admin_override"
-                and "flooding" in (l["remark"] or "")
-                for l in logs
+                log_entry["incident_id"] == c_ovr["incident_id"]
+                and log_entry["source"] == "admin_override"
+                and "flooding" in (log_entry["remark"] or "")
+                for log_entry in logs
             )
         )
 

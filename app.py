@@ -20,6 +20,7 @@ from core.auth import (
     request_password_reset,
 )
 import core.database as _db
+from core.health import get_health_status
 from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
 from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from core.privacy import get_privacy_notice_markdown
@@ -323,6 +324,10 @@ def render_topbar(user: dict) -> None:
 
 
 def main() -> None:
+    if str(st.query_params.get("health", "")).strip() == "1":
+        st.json(get_health_status())
+        return
+
     user = st.session_state.get("user")
 
     if user is not None:

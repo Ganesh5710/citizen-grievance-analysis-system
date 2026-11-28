@@ -4,7 +4,6 @@ and permission-aware complaint dashboard.
 Follows Streamlit's native Light / Dark / System theme via CSS theme variables.
 """
 
-from datetime import datetime, timezone
 import html
 
 import pandas as pd
@@ -18,6 +17,7 @@ from core.complaints import (
     VALID_STATUSES,
     accept_task,
     add_internal_note,
+    assign_complaint,
     assign_task,
     claim_complaint,
     delete_complaint,
@@ -32,7 +32,7 @@ from core.complaints import (
     update_complaint,
 )
 from core.departments import get_active_departments, get_all_departments
-from core.images import MAX_IMAGES_PER_COMPLAINT, get_images, remove_image
+from core.images import get_images, remove_image
 from core.locations import get_districts, get_mandals
 from core.ml_service import get_review_queue, resolve_review_item
 from core.performance import get_employee_own_performance, get_performance_metrics

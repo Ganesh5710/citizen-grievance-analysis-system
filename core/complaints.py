@@ -14,7 +14,6 @@ from core.config import get_env_float
 import core.database as _db
 from core.images import (
     MAX_IMAGES_PER_COMPLAINT,
-    add_after_images,
     get_image_counts_map,
     prepare_images,
     save_prepared_images_in_conn,
