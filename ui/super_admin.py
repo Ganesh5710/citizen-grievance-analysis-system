@@ -39,6 +39,7 @@ from core.locations import (
     get_location_stats,
     get_mandals,
     reload_locations_admin,
+    set_district_self_claim,
 )
 from core.ml_service import activate_ml_model, list_ml_models, retrain_ml_models
 from core.oversight import (
@@ -1056,9 +1057,39 @@ def _render_locations_tab(user: dict) -> None:
 
     dists = get_districts(active_only=True)
     if dists:
+        st.markdown("#### District Self-Claim Policy (Default: Disabled)")
+        d_map = {d["id"]: d for d in dists}
+        scol1, scol2 = st.columns([2, 1], vertical_alignment="bottom")
+        with scol1:
+            sel_sc_dist = st.selectbox(
+                "Select District",
+                options=list(d_map.keys()),
+                format_func=lambda did: f"{d_map[did]['name']} (Self-claim: {'ON' if d_map[did].get('allow_self_claim') else 'OFF'})",
+                key="sa_sc_dist_sel",
+            )
+        cur_sc = bool(d_map[sel_sc_dist].get("allow_self_claim"))
+        with scol2:
+            if st.button(
+                "Disable Self-Claim" if cur_sc else "Enable Self-Claim",
+                key="sa_sc_toggle_btn",
+                width="stretch",
+            ):
+                set_district_self_claim(user, sel_sc_dist, not cur_sc)
+                st.session_state["sa_loc_flash"] = (
+                    f"Self-claim {'disabled' if cur_sc else 'enabled'} for {d_map[sel_sc_dist]['name']}."
+                )
+                st.rerun()
+
         st.markdown("#### Loaded Districts")
         st.dataframe(
-            pd.DataFrame([{"ID": d["id"], "District": d["name"]} for d in dists]),
+            pd.DataFrame([
+                {
+                    "ID": d["id"],
+                    "District": d["name"],
+                    "Self-Claim Allowed": "Yes" if d.get("allow_self_claim") else "No",
+                }
+                for d in dists
+            ]),
             width="stretch",
             hide_index=True,
         )

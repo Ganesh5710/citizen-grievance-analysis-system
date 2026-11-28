@@ -188,6 +188,7 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "duration_confidence":  row["duration_confidence"],
         "is_recurring":         bool(row["is_recurring"] or 0),
         "priority_reason":      row["priority_reason"] or "",
+        "district_allow_self_claim": bool(row["district_allow_self_claim"] or 0),
         "created_at":           row["created_at"],
         "updated_at":           row["updated_at"],
     }
@@ -209,6 +210,7 @@ SELECT c.id,
        st.name AS state_name,
        c.district_id,
        dist.name AS district_name,
+       COALESCE(dist.allow_self_claim, 0) AS district_allow_self_claim,
        c.mandal_id,
        mnd.name AS mandal_name,
        c.area_id,
@@ -307,6 +309,11 @@ def submit_complaint(
     res_area_id = resolved_loc["area_id"]
     res_pincode = resolved_loc["pincode"]
 
+    if res_dist_id is None:
+        raise ValueError(
+            "A valid district and location (via 6-digit pincode or State -> District -> Area) are required."
+        )
+
     if not clean_location:
         parts = [p for p in (resolved_loc.get("area_name"), resolved_loc.get("district_name"), res_pincode) if p]
         clean_location = ", ".join(parts) or "Location recorded"
@@ -326,8 +333,8 @@ def submit_complaint(
     now_str = _fmt_dt(now_dt)
 
     resolved_ward_id = ward_id
-    if resolved_ward_id is None and eff_lat is not None and eff_lon is not None and res_dist_id is None:
-        nearest = find_nearest_ward(float(eff_lat), float(eff_lon))
+    if resolved_ward_id is None and latitude is not None and longitude is not None:
+        nearest = find_nearest_ward(float(latitude), float(longitude))
         if nearest:
             resolved_ward_id = nearest["id"]
 
@@ -361,17 +368,11 @@ def submit_complaint(
 
         due_at = compute_due_at(conn, department_id, priority, now_dt)
 
-        if res_dist_id is not None:
-            # Hierarchical AP workflow: routes to District Admin as 'Awaiting Assignment' (NO auto-assign)
-            initial_status = "Awaiting Assignment"
-            assignee = None
-            assigned_to = None
-            assigned_at = None
-        else:
-            initial_status = "Pending"
-            assignee = _pick_least_loaded_employee(conn, department_id)
-            assigned_to = assignee["id"] if assignee else None
-            assigned_at = now_str if assignee else None
+        # Always route to 'Awaiting Assignment' for Admin review; never auto-assign.
+        initial_status = "Awaiting Assignment"
+        assignee = None
+        assigned_to = None
+        assigned_at = None
 
         cursor = conn.execute(
             """
@@ -534,10 +535,11 @@ def get_complaints(user: dict | None, now: datetime | None = None) -> list[dict]
                 if emp_dist_id is not None:
                     rows = conn.execute(
                         _BASE_SELECT
-                        + " WHERE c.is_deleted = 0 AND c.department_id = ? AND c.assigned_to = ? "
+                        + " WHERE c.is_deleted = 0 AND c.department_id = ? "
                         "AND (c.district_id IS NULL OR c.district_id = ?) "
+                        "AND (c.assigned_to = ? OR (c.assigned_to IS NULL AND COALESCE(dist.allow_self_claim, 0) = 1 AND c.status NOT IN ('Resolved', 'Closed'))) "
                         "ORDER BY c.created_at DESC, c.id DESC",
-                        (dept_id, user["id"], int(emp_dist_id)),
+                        (dept_id, int(emp_dist_id), user["id"]),
                     ).fetchall()
                 else:
                     # District-less employee: sees assigned tasks + legacy unassigned district-less tasks only
@@ -612,7 +614,13 @@ def get_complaint_detail(user: dict | None, complaint_id: int, now: datetime | N
                 if user.get("district_id") is None or int(user["district_id"]) != int(row["district_id"]):
                     raise PermissionError("Complaint is outside your district jurisdiction.")
                 if row["assigned_to"] != user.get("id"):
-                    raise PermissionError("Employees can only view tasks assigned to them.")
+                    can_see_unassigned = (
+                        row["assigned_to"] is None
+                        and bool(row["district_allow_self_claim"])
+                        and row["status"] not in ("Resolved", "Closed")
+                    )
+                    if not can_see_unassigned:
+                        raise PermissionError("Employees can only view tasks assigned to them.")
         elif role == "admin":
             _assert_admin_jurisdiction(conn, user, row["district_id"], row["department_id"])
 
@@ -727,28 +735,46 @@ def get_suggested_employee(actor: dict | None, complaint_id: int) -> dict | None
 
 def claim_complaint(actor: dict | None, complaint_id: int) -> dict:
     """
-    Allow an active employee to claim an unassigned complaint in their own department.
-    Writes audit row(s) to complaint_updates.
+    Allow an active employee to claim an unassigned complaint in their own department
+    and district ONLY when an Admin/Super Admin has enabled allow_self_claim for that district.
+    Disabled by default (self-claim forbidden outside admin assignment flow).
     """
     require(actor, "claim_complaint")
 
     now_str = _fmt_dt(_utc_now())
     with closing(_db.get_connection()) as conn, conn:
         row = conn.execute(
-            "SELECT id, department_id, status, assigned_to, is_deleted FROM complaints WHERE id = ?",
+            """
+            SELECT c.id, c.department_id, c.district_id, c.mandal_id, c.status,
+                   c.assigned_to, c.is_deleted,
+                   COALESCE(d.allow_self_claim, 0) AS allow_self_claim
+            FROM complaints c
+            LEFT JOIN districts d ON d.id = c.district_id
+            WHERE c.id = ?
+            """,
             (complaint_id,),
         ).fetchone()
         if row is None or row["is_deleted"]:
             raise ValueError(f"Complaint with id {complaint_id} not found.")
+        if not int(row["allow_self_claim"] or 0):
+            raise PermissionError(
+                "Self-claim is disabled for this district; tasks must be assigned by an Admin."
+            )
         if actor.get("department_id") is None or row["department_id"] != actor.get("department_id"):
             raise PermissionError("You can only claim complaints in your own department.")
+        if row["district_id"] is not None:
+            if actor.get("district_id") is None or int(actor["district_id"]) != int(row["district_id"]):
+                raise PermissionError("You can only claim complaints in your own district.")
+            if actor.get("mandal_id") is not None and row["mandal_id"] is not None:
+                if int(actor["mandal_id"]) != int(row["mandal_id"]):
+                    raise PermissionError("You can only claim complaints in your own mandal.")
         if row["assigned_to"] is not None:
             raise ValueError("Complaint is already assigned.")
         if row["status"] in ("Resolved", "Closed"):
             raise ValueError("Cannot claim a Resolved or Closed complaint.")
 
         old_status = row["status"]
-        new_status = "Assigned" if old_status == "Pending" else old_status
+        new_status = "Assigned" if old_status in ("Awaiting Assignment", "Pending", "Submitted") else old_status
 
         conn.execute(
             """
@@ -1115,22 +1141,16 @@ def update_complaint(
         elif target_status not in ("Resolved", "Closed"):
             target_resolved_at = None
 
-        # Department change in hierarchical districted complaints returns to Awaiting Assignment;
-        # legacy district-less workflow preserves least-loaded auto-reassignment.
+        # Department change always clears assignment and returns to Awaiting Assignment
         target_assigned_to = row["assigned_to"]
         target_assigned_at = None
         new_assignee = None
         dept_changed = target_dept_id != old_dept_id
         if dept_changed:
-            if row["district_id"] is not None:
-                target_assigned_to = None
-                target_assigned_at = None
-                if target_status in ("Assigned", "In Progress"):
-                    target_status = "Awaiting Assignment"
-            else:
-                new_assignee = _pick_least_loaded_employee(conn, target_dept_id)
-                target_assigned_to = new_assignee["id"] if new_assignee else None
-                target_assigned_at = now_str if new_assignee else None
+            target_assigned_to = None
+            target_assigned_at = None
+            if target_status in ("Assigned", "In Progress", "Pending"):
+                target_status = "Awaiting Assignment"
 
         audit_rows: list[tuple[str, str, str, str, str]] = []
         status_src = "admin_override" if is_admin_override else "staff_update"

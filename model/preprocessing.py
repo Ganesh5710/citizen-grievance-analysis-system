@@ -1,39 +1,20 @@
 import re
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
 
-# Download required NLTK resources
-nltk.download("stopwords")
-nltk.download("wordnet")
-nltk.download("omw-1.4")
-
-# Initialize tools
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words("english"))
+stop_words = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
+    "he", "in", "is", "it", "its", "of", "on", "that", "the", "to", "was",
+    "were", "will", "with",
+}
 
 
 def clean_text(text):
     """
-    Clean and preprocess complaint text
+    Clean and preprocess complaint text without eager network calls or unclosed NLTK DB handles.
     """
     if not isinstance(text, str):
         return ""
 
-    # Convert to lowercase
     text = text.lower()
-
-    # Remove special characters and numbers
     text = re.sub(r"[^a-zA-Z\s]", "", text)
-
-    # Tokenize
     words = text.split()
-
-    # Remove stopwords and apply lemmatization
-    cleaned_words = [
-        lemmatizer.lemmatize(word)
-        for word in words
-        if word not in stop_words
-    ]
-
-    return " ".join(cleaned_words)
+    return " ".join(w for w in words if w not in stop_words)

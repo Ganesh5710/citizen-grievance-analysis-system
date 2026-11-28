@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,14 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import FeatureUnion, Pipeline
@@ -35,6 +43,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from core.config import PROJECT_ROOT, get_env_str
 from core.logging_setup import get_logger
 from ml.features import DurationNumericFeatures
+from model.preprocessing import clean_text
 
 logger = get_logger("ml.trainer")
 
@@ -249,15 +258,24 @@ def _evaluate_task(
             fold_acc.append(float(accuracy_score(y_va, preds)))
             fold_f1.append(float(f1_score(y_va, preds, average="macro", zero_division=0)))
 
-        # Fit on full train_df using the shared fitted vectorizer and wrap as a Pipeline
+        # Fit on full train_df using the shared fitted vectorizer and measure train/inference timings
         clf_full = est_fn()
+        t_fit_start = time.perf_counter()
         clf_full.fit(X_train_mat, y_train)
+        train_time_sec = round(time.perf_counter() - t_fit_start, 4)
+
         full_pipe = Pipeline([
             ("features", full_vec),
             ("clf", clf_full),
         ])
+        t_inf_start = time.perf_counter()
         test_preds = clf_full.predict(X_test_mat)
+        inference_time_ms = round((time.perf_counter() - t_inf_start) * 1000.0, 2)
+        inf_per_sample_ms = round(inference_time_ms / max(1, len(X_test)), 4)
+
         test_acc = float(accuracy_score(y_test, test_preds))
+        test_macro_prec = float(precision_score(y_test, test_preds, average="macro", zero_division=0))
+        test_macro_rec = float(recall_score(y_test, test_preds, average="macro", zero_division=0))
         test_macro_f1 = float(f1_score(y_test, test_preds, average="macro", zero_division=0))
         test_weighted_f1 = float(f1_score(y_test, test_preds, average="weighted", zero_division=0))
 
@@ -269,8 +287,13 @@ def _evaluate_task(
             "cv_macro_f1_mean": round(float(np.mean(fold_f1)), 4),
             "cv_macro_f1_std": round(float(np.std(fold_f1)), 4),
             "test_accuracy": round(test_acc, 4),
+            "test_macro_precision": round(test_macro_prec, 4),
+            "test_macro_recall": round(test_macro_rec, 4),
             "test_macro_f1": round(test_macro_f1, 4),
             "test_weighted_f1": round(test_weighted_f1, 4),
+            "train_time_sec": train_time_sec,
+            "inference_time_ms": inference_time_ms,
+            "inference_ms_per_sample": inf_per_sample_ms,
         })
 
     results.sort(key=lambda r: (r["cv_macro_f1_mean"], r["test_macro_f1"]), reverse=True)
@@ -297,19 +320,31 @@ def _evaluate_task(
             "macro_f1": round(float(f1_score(y_l, p_l, average="macro", zero_division=0)), 4),
         }
 
-    # Ablation on the winning estimator family
+    # Comprehensive ablation on the winning estimator family
     est_factory = _candidate_estimators()[best_name]
+    ablation_specs: list[tuple[str, Any, list[str], list[str]]] = [
+        ("word_unigram_1_1", TfidfVectorizer(ngram_range=(1, 1), max_features=6000, sublinear_tf=True, min_df=2), X_train, X_test),
+        ("word_bigram_1_2", build_vectorizer("word"), X_train, X_test),
+        ("char_wb_3_5", build_vectorizer("char"), X_train, X_test),
+        ("stop_words_english", TfidfVectorizer(ngram_range=(1, 2), max_features=6000, sublinear_tf=True, min_df=2, stop_words="english"), X_train, X_test),
+        ("clean_text_enabled", build_vectorizer("tfidf_only"), [clean_text(t) for t in X_train], [clean_text(t) for t in X_test]),
+        ("tfidf_raw_tf", TfidfVectorizer(ngram_range=(1, 2), max_features=6000, sublinear_tf=False, min_df=2), X_train, X_test),
+        ("tfidf_only", build_vectorizer("tfidf_only"), X_train, X_test),
+        ("both", build_vectorizer("both"), X_train, X_test),
+    ]
     ablation: list[dict[str, Any]] = []
-    for mode in ("word", "char", "tfidf_only", "both"):
+    for mode_name, vec_obj, tr_texts, te_texts in ablation_specs:
         abl_pipe = Pipeline([
-            ("features", build_vectorizer(mode)),
+            ("features", vec_obj),
             ("clf", est_factory()),
         ])
-        abl_pipe.fit(X_train, y_train)
-        abl_preds = abl_pipe.predict(X_test)
+        abl_pipe.fit(tr_texts, y_train)
+        abl_preds = abl_pipe.predict(te_texts)
         ablation.append({
-            "feature_set": mode,
+            "feature_set": mode_name,
             "test_accuracy": round(float(accuracy_score(y_test, abl_preds)), 4),
+            "test_macro_precision": round(float(precision_score(y_test, abl_preds, average="macro", zero_division=0)), 4),
+            "test_macro_recall": round(float(recall_score(y_test, abl_preds, average="macro", zero_division=0)), 4),
             "test_macro_f1": round(float(f1_score(y_test, abl_preds, average="macro", zero_division=0)), 4),
         })
 

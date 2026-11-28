@@ -83,10 +83,11 @@ CREATE TABLE IF NOT EXISTS states (
 );
 
 CREATE TABLE IF NOT EXISTS districts (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    state_id  INTEGER NOT NULL REFERENCES states(id),
-    name      TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1,
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_id         INTEGER NOT NULL REFERENCES states(id),
+    name             TEXT NOT NULL,
+    is_active        INTEGER NOT NULL DEFAULT 1,
+    allow_self_claim INTEGER NOT NULL DEFAULT 0,
     UNIQUE(state_id, name)
 );
 
@@ -762,6 +763,11 @@ def init_db() -> None:
             _migrate_complaints(conn)
             _migrate_complaint_updates(conn)
             conn.executescript(_SCHEMA_SQL)
+            d_cols = _table_columns(conn, "districts")
+            if d_cols and "allow_self_claim" not in d_cols:
+                conn.execute(
+                    "ALTER TABLE districts ADD COLUMN allow_self_claim INTEGER NOT NULL DEFAULT 0"
+                )
             c_cols = _table_columns(conn, "complaints")
             for col_name, col_def in (
                 ("state_id", "INTEGER REFERENCES states(id)"),

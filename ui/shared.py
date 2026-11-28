@@ -508,7 +508,7 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
     if (
         can(user, "claim_complaint")
         and detail.get("assigned_to") is None
-        and detail.get("district_id") is None
+        and detail.get("district_allow_self_claim")
         and not is_closed_or_resolved
     ):
         if st.button(
@@ -857,20 +857,17 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
 
     queue_mode = "All"
     if is_employee:
-        if user.get("district_id"):
-            queue_mode = st.radio(
-                "Queue View",
-                options=["My Queue"],
-                horizontal=True,
-                key=f"{key_prefix}_queue_mode",
-            )
-        else:
-            queue_mode = st.radio(
-                "Queue View",
-                options=["My Queue", "Unassigned", "All Department"],
-                horizontal=True,
-                key=f"{key_prefix}_queue_mode",
-            )
+        has_claimable = any(
+            c.get("assigned_to") is None and c.get("district_allow_self_claim")
+            for c in complaints
+        )
+        q_opts = ["My Queue", "Unassigned"] if has_claimable else ["My Queue"]
+        queue_mode = st.radio(
+            "Queue View",
+            options=q_opts,
+            horizontal=True,
+            key=f"{key_prefix}_queue_mode",
+        )
 
     if is_employee:
         filter_col1, filter_col2 = st.columns([3, 1], vertical_alignment="bottom")

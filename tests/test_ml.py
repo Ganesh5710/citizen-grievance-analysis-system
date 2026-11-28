@@ -40,6 +40,12 @@ class TestMLPhase1(unittest.TestCase):
 
         db_mod.init_db()
         db_mod.seed_demo_accounts()
+        with db_mod.get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO states (id, name, code, is_active) VALUES (1, 'Andhra Pradesh', 'AP', 1)")
+            conn.execute("INSERT OR IGNORE INTO districts (id, state_id, name, is_active, allow_self_claim) VALUES (1, 1, 'Guntur', 1, 0)")
+            conn.execute("INSERT OR IGNORE INTO areas (id, district_id, name, latitude, longitude, is_active) VALUES (1, 1, 'Arundelpet S.O', 16.3067, 80.4365, 1)")
+            conn.execute("INSERT OR IGNORE INTO pincodes (pincode, area_id, district_id, state_id) VALUES ('522002', 1, 1, 1)")
+            conn.commit()
         cls.auth = auth_mod
         cls.dept_mod = dept_mod
 
@@ -49,6 +55,8 @@ class TestMLPhase1(unittest.TestCase):
 
         cls.admin = cls.auth.login("admin", "SeedTest@123")
         cls.auth.change_own_password(cls.admin, "SeedTest@123", "AdminPass@123")
+        cls.admin = cls.auth.login("admin", "AdminPass@123")
+        cls.auth.update_admin_jurisdiction(cls.super_admin, cls.admin["id"], [1])
         cls.admin = cls.auth.login("admin", "AdminPass@123")
 
         cls.employee = cls.auth.login("employee", "SeedTest@123")
@@ -92,6 +100,10 @@ class TestMLPhase1(unittest.TestCase):
         self.assertIn("department", self.initial_meta)
         self.assertIn("priority", self.initial_meta)
         self.assertEqual(len(self.initial_meta["department"]["model_comparison"]), 4)
+        first_row = self.initial_meta["department"]["model_comparison"][0]
+        for k in ("test_accuracy", "test_macro_precision", "test_macro_recall", "test_macro_f1", "train_time_sec", "inference_time_ms"):
+            self.assertIn(k, first_row)
+        self.assertGreaterEqual(len(self.initial_meta["department"]["ablation"]), 8)
         self.assertTrue(Path(self.initial_meta["artifact_path"]).exists())
         self.assertTrue(Path(self.initial_meta["metadata_path"]).exists())
         self.assertTrue(self.initial_meta["activated"])
@@ -164,6 +176,8 @@ class TestMLPhase1(unittest.TestCase):
             self.depts["Traffic"]["id"],
             "No drinking water supply and burst water pipeline flooding street near Banjara Hills",
             "Banjara Hills Road 12",
+            pincode="522002",
+            area_id=1,
         )
         complaints = comp_mod.get_complaints(self.citizen)
         saved = next(c for c in complaints if c["incident_id"] == incident_id)

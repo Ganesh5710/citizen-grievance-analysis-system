@@ -93,7 +93,7 @@ citizen_grievance_project/
 | `assign_task` / `assign_complaint` | No | No | Yes | Yes | Assign/reassign with due date & instructions to matching dept + jurisdiction employee |
 | `accept_task` | No | Yes | No | No | Employee explicitly accepts an assigned task and logs acceptance |
 | `update_task_status` / `update_status_remark` | No | Yes | Yes | Yes | Employee only on tasks assigned to them; Admin status override requires mandatory reason |
-| `claim_complaint` | No | Yes | No | No | Legacy unscoped unassigned queue only |
+| `claim_complaint` | No | Yes | No | No | Disabled by default; works only when Admin enables `allow_self_claim` for that district & employee matches dept + district |
 | `edit_complaint_fields` | No | No | Yes | Yes | Change department and priority (recalculates SLA); employees blocked (`PermissionError`) |
 | `remove_image` | No | No | Yes | Yes | Soft delete with confirmation + audit row |
 | `delete_complaint` | No | No | No | Yes | Soft delete with confirmation + audit row |

@@ -37,6 +37,7 @@ import core.complaints as comp_mod
 import core.database as db_mod
 import core.departments as dept_mod
 import core.images as img_mod
+import core.locations as loc_mod
 import core.performance as perf_mod
 import core.sla as sla_mod
 import core.wards as ward_mod
@@ -68,6 +69,12 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
         db_mod.init_db()
         db_mod.seed_demo_accounts()
+        with db_mod.get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO states (id, name, code, is_active) VALUES (1, 'Andhra Pradesh', 'AP', 1)")
+            conn.execute("INSERT OR IGNORE INTO districts (id, state_id, name, is_active, allow_self_claim) VALUES (1, 1, 'Guntur', 1, 0)")
+            conn.execute("INSERT OR IGNORE INTO areas (id, district_id, name, latitude, longitude, is_active) VALUES (1, 1, 'Arundelpet S.O', 16.3067, 80.4365, 1)")
+            conn.execute("INSERT OR IGNORE INTO pincodes (pincode, area_id, district_id, state_id) VALUES ('522002', 1, 1, 1)")
+            conn.commit()
         sa_first = auth_mod.login("superadmin", "SeedTest@123")
         assert sa_first is not None and sa_first["must_change_password"] is True
         cls.superadmin = auth_mod.change_own_password(sa_first, "SeedTest@123", "SuperSecret@123")
@@ -79,6 +86,7 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         emp_first = auth_mod.login("employee", "SeedTest@123")
         assert emp_first is not None and emp_first["must_change_password"] is True
         cls.emp_water_1 = auth_mod.change_own_password(emp_first, "SeedTest@123", "EmpSecret@123")
+        cls.emp_water_1 = auth_mod.set_user_jurisdiction(cls.superadmin, cls.emp_water_1["id"], 1)
 
         cls.depts = dept_mod.get_active_departments()
         cls.water = next(d for d in cls.depts if d["name"] == "Water")
@@ -89,10 +97,10 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
 
         cls.emp_roads = auth_mod.create_user_account(
             cls.superadmin, "emp_roads", "Roads Emp", "Roads@123", "employee",
-            department_id=cls.roads["id"],
+            department_id=cls.roads["id"], district_id=1,
         )
-        cls.admin_user = auth_mod.create_user_account(
-            cls.superadmin, "adm_main", "Main Admin", "Admin@123", "admin"
+        cls.admin_user = auth_mod.create_admin_account(
+            cls.superadmin, "adm_main", "Main Admin", "Admin@123", district_ids=[1]
         )
         cls.citizen_a = auth_mod.register("citizen_a", "Citizen A", "Password@1")
         cls.citizen_b = auth_mod.register("citizen_b", "Citizen B", "Password@2")
@@ -108,6 +116,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.traffic["id"],
             "Waterlogged traffic junction signal is broken",
             "Main Square",
+            pincode="522002",
+            area_id=1,
         )
         saved = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
         self.assertEqual(saved["department_id"], self.traffic["id"])
@@ -116,12 +126,12 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
     def test_02_nonexistent_or_deactivated_dept_raises_value_error(self):
         with self.assertRaises(ValueError):
             comp_mod.submit_complaint(
-                self.citizen_a, 999999, "Valid complaint text here", "Block A"
+                self.citizen_a, 999999, "Valid complaint text here", "Block A", pincode="522002", area_id=1
             )
 
         custom = dept_mod.create_department(self.superadmin, "Parks", "Parks and open grounds")
         inc_before = comp_mod.submit_complaint(
-            self.citizen_a, custom["id"], "Broken bench in city park", "Central Park"
+            self.citizen_a, custom["id"], "Broken bench in city park", "Central Park", pincode="522002", area_id=1
         )
         dept_mod.set_department_active(self.superadmin, custom["id"], False)
 
@@ -131,7 +141,7 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         # Rejected for new submissions
         with self.assertRaises(ValueError):
             comp_mod.submit_complaint(
-                self.citizen_a, custom["id"], "Park gate broken near east", "East Gate"
+                self.citizen_a, custom["id"], "Park gate broken near east", "East Gate", pincode="522002", area_id=1
             )
 
         # Old complaint remains intact
@@ -143,7 +153,7 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         for actor in (self.emp_water_1, self.admin_user, self.superadmin, None):
             with self.assertRaises(PermissionError):
                 comp_mod.submit_complaint(
-                    actor, self.water["id"], "Staff cannot submit complaint", "City Hall"
+                    actor, self.water["id"], "Staff cannot submit complaint", "City Hall", pincode="522002", area_id=1
                 )
 
     def test_04_priority_auto_detected_via_classify(self):
@@ -152,6 +162,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.elec["id"],
             "Transformer fire near school gate",
             "School Gate",
+            pincode="522002",
+            area_id=1,
         )
         saved = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
         self.assertEqual(saved["priority"], "High")
@@ -171,6 +183,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.water["id"],
             "Water pipe burst with attached photo evidence",
             "Market Street",
+            pincode="522002",
+            area_id=1,
             files=[("leak.jpg", jpg_bytes), ("map.png", png_bytes)],
         )
         comp = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
@@ -190,6 +204,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.water["id"],
             "Another water leak for invalid upload tests",
             "Lane 2",
+            pincode="522002",
+            area_id=1,
         )
         comp2 = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc2)
 
@@ -213,11 +229,14 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.water["id"],
             "Water supply contamination photo proof",
             "Ward 5",
+            pincode="522002",
+            area_id=1,
             files=[("sample.jpg", jpg_bytes)],
         )
         comp = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
+        comp_mod.assign_task(self.admin_user, comp["id"], self.emp_water_1["id"])
 
-        # Owner, same-dept employee, admin, superadmin can view
+        # Owner, assigned employee, admin, superadmin can view
         self.assertEqual(len(img_mod.get_images(self.citizen_a, comp["id"])), 1)
         self.assertEqual(len(img_mod.get_images(self.emp_water_1, comp["id"])), 1)
         self.assertEqual(len(img_mod.get_images(self.admin_user, comp["id"])), 1)
@@ -261,6 +280,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.roads["id"],
             "Large pothole photo with GPS metadata",
             "Highway Exit 3",
+            pincode="522002",
+            area_id=1,
             files=[("../../evil/path name.jpg", raw_with_exif)],
         )
         comp = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
@@ -285,50 +306,80 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
     # PHASE 3: ASSIGNMENT, SLA, ESCALATION, FEEDBACK (Tests 10-14)
     # ==================================================================
 
-    def test_08_auto_assign_least_loaded_and_unassigned_when_none(self):
-        # Create a fresh department with 2 employees to verify load-balancing cleanly
+    def test_08_no_district_rejected_no_auto_assign_and_suggested_employee(self):
         dept_lb = dept_mod.create_department(self.superadmin, "Lighting", "Street lights maintenance")
         e1 = auth_mod.create_user_account(
-            self.superadmin, "emp_lb1", "LB Emp 1", "Pass@1234", "employee", department_id=dept_lb["id"]
+            self.superadmin, "emp_lb1", "LB Emp 1", "Pass@1234", "employee",
+            department_id=dept_lb["id"], district_id=1,
         )
         e2 = auth_mod.create_user_account(
-            self.superadmin, "emp_lb2", "LB Emp 2", "Pass@1234", "employee", department_id=dept_lb["id"]
+            self.superadmin, "emp_lb2", "LB Emp 2", "Pass@1234", "employee",
+            department_id=dept_lb["id"], district_id=1,
         )
 
-        # 1st complaint goes to e1 (0 vs 0 -> lowest id wins)
-        i1 = comp_mod.submit_complaint(self.citizen_a, dept_lb["id"], "Streetlight out at corner 1", "Corner 1")
+        # Complaint without a district/pincode MUST be rejected
+        with self.assertRaises(ValueError):
+            comp_mod.submit_complaint(self.citizen_a, dept_lb["id"], "Streetlight out at corner 1", "Corner 1")
+
+        # Valid submission enters Awaiting Assignment with NO auto-assignment
+        i1 = comp_mod.submit_complaint(
+            self.citizen_a, dept_lb["id"], "Streetlight out at corner 1", "Corner 1", pincode="522002", area_id=1
+        )
         c1 = next(c for c in comp_mod.get_complaints(self.admin_user) if c["incident_id"] == i1)
-        self.assertEqual(c1["assigned_to"], e1["id"])
+        self.assertEqual(c1["status"], "Awaiting Assignment")
+        self.assertIsNone(c1["assigned_to"])
 
-        # 2nd complaint goes to e2 (0 vs 1)
-        i2 = comp_mod.submit_complaint(self.citizen_a, dept_lb["id"], "Streetlight out at corner 2", "Corner 2")
+        # Admin sees least-loaded suggested employee (0 vs 0 -> e1) and assigns explicitly
+        sug1 = comp_mod.get_suggested_employee(self.admin_user, c1["id"])
+        self.assertIsNotNone(sug1)
+        self.assertEqual(sug1["id"], e1["id"])
+        comp_mod.assign_task(self.admin_user, c1["id"], e1["id"])
+
+        # 2nd complaint also starts unassigned, suggested employee is now e2 (0 vs 1)
+        i2 = comp_mod.submit_complaint(
+            self.citizen_a, dept_lb["id"], "Streetlight out at corner 2", "Corner 2", pincode="522002", area_id=1
+        )
         c2 = next(c for c in comp_mod.get_complaints(self.admin_user) if c["incident_id"] == i2)
-        self.assertEqual(c2["assigned_to"], e2["id"])
+        self.assertEqual(c2["status"], "Awaiting Assignment")
+        self.assertIsNone(c2["assigned_to"])
+        sug2 = comp_mod.get_suggested_employee(self.admin_user, c2["id"])
+        self.assertEqual(sug2["id"], e2["id"])
 
-        # Department with no active employees -> unassigned
+        # Department with no active employees -> no suggestion, stays unassigned
         dept_empty = dept_mod.create_department(self.superadmin, "DrainageEmpty", "Storm drains")
-        i3 = comp_mod.submit_complaint(self.citizen_a, dept_empty["id"], "Storm drain clogged near bridge", "Bridge")
+        i3 = comp_mod.submit_complaint(
+            self.citizen_a, dept_empty["id"], "Storm drain clogged near bridge", "Bridge", pincode="522002", area_id=1
+        )
         c3 = next(c for c in comp_mod.get_complaints(self.admin_user) if c["incident_id"] == i3)
         self.assertIsNone(c3["assigned_to"])
+        self.assertIsNone(comp_mod.get_suggested_employee(self.admin_user, c3["id"]))
 
-    def test_09_employee_scope_claim_and_admin_reassign(self):
-        # Department with no employees initially -> unassigned complaint
+    def test_09_employee_scope_claim_restricted_and_admin_reassign(self):
         dept_c = dept_mod.create_department(self.superadmin, "Housing", "Public housing maintenance")
         inc = comp_mod.submit_complaint(
-            self.citizen_a, dept_c["id"], "Roof leakage in municipal quarters", "Block D"
+            self.citizen_a, dept_c["id"], "Roof leakage in municipal quarters", "Block D",
+            pincode="522002", area_id=1,
         )
         comp = next(c for c in comp_mod.get_complaints(self.admin_user) if c["incident_id"] == inc)
         self.assertIsNone(comp["assigned_to"])
 
-        # Add two employees in Housing
         h_emp1 = auth_mod.create_user_account(
-            self.superadmin, "emp_house1", "House Emp 1", "Pass@1234", "employee", department_id=dept_c["id"]
+            self.superadmin, "emp_house1", "House Emp 1", "Pass@1234", "employee",
+            department_id=dept_c["id"], district_id=1,
         )
         h_emp2 = auth_mod.create_user_account(
-            self.superadmin, "emp_house2", "House Emp 2", "Pass@1234", "employee", department_id=dept_c["id"]
+            self.superadmin, "emp_house2", "House Emp 2", "Pass@1234", "employee",
+            department_id=dept_c["id"], district_id=1,
         )
 
-        # Roads employee cannot view or claim Housing complaint
+        # Default allow_self_claim=False -> even matching employee CANNOT claim!
+        with self.assertRaises(PermissionError):
+            comp_mod.claim_complaint(h_emp1, comp["id"])
+
+        # Enable self-claim for district 1
+        loc_mod.set_district_self_claim(self.admin_user, 1, True)
+
+        # Roads employee still cannot view or claim Housing complaint
         with self.assertRaises(PermissionError):
             comp_mod.get_complaint_detail(self.emp_roads, comp["id"])
         with self.assertRaises(PermissionError):
@@ -338,10 +389,13 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         with self.assertRaises(PermissionError):
             comp_mod.update_complaint(h_emp1, comp["id"], new_status="In Progress")
 
-        # Claim works!
+        # Claim works once Admin enabled self-claim for that district
         claimed = comp_mod.claim_complaint(h_emp1, comp["id"])
         self.assertEqual(claimed["assigned_to"], h_emp1["id"])
         self.assertEqual(claimed["status"], "Assigned")
+
+        # Disable self-claim back to default OFF
+        loc_mod.set_district_self_claim(self.admin_user, 1, False)
 
         # h_emp2 cannot edit complaint assigned to h_emp1
         with self.assertRaises(PermissionError):
@@ -355,7 +409,7 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         reassigned = comp_mod.assign_complaint(self.admin_user, comp["id"], h_emp2["id"], "Reassigning")
         self.assertEqual(reassigned["assigned_to"], h_emp2["id"])
 
-        # Changing department auto-reassigns to an employee of the new department (or unassigns)
+        # Changing department clears assignment & returns to Awaiting Assignment (never auto-assigns)
         comp_mod.update_complaint(
             self.admin_user,
             comp["id"],
@@ -364,7 +418,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         )
         after_dept = comp_mod.get_complaint_detail(self.admin_user, comp["id"])
         self.assertEqual(after_dept["department_id"], self.sanitation["id"])
-        self.assertIsNone(after_dept["assigned_to"])  # Sanitation has no active employee yet
+        self.assertEqual(after_dept["status"], "Awaiting Assignment")
+        self.assertIsNone(after_dept["assigned_to"])
 
     def test_10_sla_due_at_recalc_and_escalations(self):
         # Customize Water / High SLA to 4 hours
@@ -377,6 +432,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.water["id"],
             "Urgent main water pipe burst on avenue",
             "Avenue 9",
+            pincode="522002",
+            area_id=1,
         )
         comp = next(c for c in comp_mod.get_complaints(self.admin_user) if c["incident_id"] == inc)
         created_dt = sla_mod.parse_utc(comp["created_at"])
@@ -411,12 +468,15 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
     def test_11_feedback_reopen_closing_remark_and_7day_autoclose(self):
         dept_fb = dept_mod.create_department(self.superadmin, "FeedbackDept", "Feedback workflow testing")
         emp_fb = auth_mod.create_user_account(
-            self.superadmin, "emp_fb", "FB Emp", "Pass@1234", "employee", department_id=dept_fb["id"]
+            self.superadmin, "emp_fb", "FB Emp", "Pass@1234", "employee",
+            department_id=dept_fb["id"], district_id=1,
         )
         inc = comp_mod.submit_complaint(
-            self.citizen_a, dept_fb["id"], "Drainage cover broken near entrance", "Entrance 1"
+            self.citizen_a, dept_fb["id"], "Drainage cover broken near entrance", "Entrance 1",
+            pincode="522002", area_id=1,
         )
         comp = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc)
+        comp_mod.assign_task(self.admin_user, comp["id"], emp_fb["id"])
 
         # Resolving with remark < 10 chars fails
         with self.assertRaises(ValueError):
@@ -475,9 +535,11 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
 
         # Auto-close after 7 days on another complaint without citizen response
         inc2 = comp_mod.submit_complaint(
-            self.citizen_a, dept_fb["id"], "Loose curb stones near park entrance", "Park Gate"
+            self.citizen_a, dept_fb["id"], "Loose curb stones near park entrance", "Park Gate",
+            pincode="522002", area_id=1,
         )
         comp2 = next(c for c in comp_mod.get_complaints(self.citizen_a) if c["incident_id"] == inc2)
+        comp_mod.assign_task(self.admin_user, comp2["id"], emp_fb["id"])
         comp_mod.update_complaint(
             emp_fb, comp2["id"], new_status="Resolved", remark="Reset curb stones with cement"
         )
@@ -535,7 +597,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
 
         # Deactivate citizen_b -> cannot login, old complaints preserved
         inc_b = comp_mod.submit_complaint(
-            self.citizen_b, self.water["id"], "Water meter leaking outside house", "House 12"
+            self.citizen_b, self.water["id"], "Water meter leaking outside house", "House 12",
+            pincode="522002", area_id=1,
         )
         auth_mod.set_user_active(self.superadmin, self.citizen_b["id"], False)
         self.assertIsNone(auth_mod.login("citizen_b", "Password@2"))
@@ -697,7 +760,7 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         self.assertFalse(auth_mod.is_session_expired(t0, now=t0 + timedelta(minutes=29)))
         self.assertTrue(auth_mod.is_session_expired(t0, now=t0 + timedelta(minutes=31)))
 
-        # Hyderabad wards seeded & nearest ward assigned automatically from coordinates
+        # Hyderabad wards seeded & nearest ward helper matches coordinates accurately
         wards = ward_mod.get_all_wards()
         self.assertGreaterEqual(len(wards), 15)
         nearest = ward_mod.find_nearest_ward(17.4486, 78.3908)
@@ -707,6 +770,8 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
             self.water["id"],
             "Water pipe leaking near cyber towers",
             "Madhapur Main",
+            pincode="522002",
+            area_id=1,
             latitude=17.4490,
             longitude=78.3910,
         )

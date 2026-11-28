@@ -41,14 +41,18 @@ def main() -> None:
     for row in meta["department"]["model_comparison"]:
         print(
             f"  {row['model']:22s} CV F1={row['cv_macro_f1_mean']:.4f} "
-            f"Test Acc={row['test_accuracy']:.4f} Test F1={row['test_macro_f1']:.4f}"
+            f"Test Acc={row['test_accuracy']:.4f} P={row['test_macro_precision']:.4f} "
+            f"R={row['test_macro_recall']:.4f} F1={row['test_macro_f1']:.4f} "
+            f"fit={row['train_time_sec']:.2f}s inf={row['inference_time_ms']:.1f}ms"
         )
     print(f"Best Department Model: {meta['department']['best_model']}")
     print("\n--- Priority Model Comparison ---")
     for row in meta["priority"]["model_comparison"]:
         print(
             f"  {row['model']:22s} CV F1={row['cv_macro_f1_mean']:.4f} "
-            f"Test Acc={row['test_accuracy']:.4f} Test F1={row['test_macro_f1']:.4f}"
+            f"Test Acc={row['test_accuracy']:.4f} P={row['test_macro_precision']:.4f} "
+            f"R={row['test_macro_recall']:.4f} F1={row['test_macro_f1']:.4f} "
+            f"fit={row['train_time_sec']:.2f}s inf={row['inference_time_ms']:.1f}ms"
         )
     print(f"Best Priority Model: {meta['priority']['best_model']}")
     print("\n--- Department Language Slices ---")
@@ -56,7 +60,10 @@ def main() -> None:
         print(f"  {lang:6s} support={stats['support']:4d} acc={stats['accuracy']:.4f} f1={stats['macro_f1']:.4f}")
     print("\n--- Department Ablation ---")
     for row in meta["department"]["ablation"]:
-        print(f"  {row['feature_set']:6s} acc={row['test_accuracy']:.4f} f1={row['test_macro_f1']:.4f}")
+        print(f"  {row['feature_set']:22s} acc={row['test_accuracy']:.4f} f1={row['test_macro_f1']:.4f}")
+    print("\n--- Priority Ablation ---")
+    for row in meta["priority"]["ablation"]:
+        print(f"  {row['feature_set']:22s} acc={row['test_accuracy']:.4f} f1={row['test_macro_f1']:.4f}")
     print(f"\nSaved artifact: {meta['artifact_path']}")
 
 

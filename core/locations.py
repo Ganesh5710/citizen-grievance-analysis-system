@@ -527,7 +527,13 @@ def get_location_stats(actor: dict | None = None) -> dict[str, Any]:
         logs = conn.execute(
             "SELECT * FROM location_load_logs ORDER BY loaded_at DESC, id DESC LIMIT 10"
         ).fetchall()
-    return {"counts": counts, "load_logs": [dict(r) for r in logs]}
+    log_dicts = [dict(r) for r in logs]
+    return {
+        **counts,
+        "counts": counts,
+        "recent_loads": log_dicts,
+        "load_logs": log_dicts,
+    }
 
 
 def reload_locations_admin(
@@ -540,3 +546,54 @@ def reload_locations_admin(
         csv_path=csv_path,
         filter_to_default_state=filter_to_default_state,
     )
+
+
+def set_district_self_claim(
+    actor: dict | None,
+    district_id: int,
+    allow_self_claim: bool,
+) -> dict:
+    """
+    Enable or disable employee self-claim (claim_complaint) for a district (default False).
+    Super Admin can update any district; Admin only their assigned district(s).
+    """
+    require(actor, "assign_task")
+    flag = 1 if allow_self_claim else 0
+    with closing(_db.get_connection()) as conn, conn:
+        row = conn.execute(
+            "SELECT id, state_id, name, is_active, COALESCE(allow_self_claim, 0) AS allow_self_claim "
+            "FROM districts WHERE id = ?",
+            (int(district_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"District with id {district_id} not found.")
+        if actor and actor.get("role") == "admin":
+            j_rows = conn.execute(
+                "SELECT district_id FROM admin_jurisdictions WHERE user_id = ?",
+                (actor["id"],),
+            ).fetchall()
+            allowed_dids = {int(r["district_id"]) for r in j_rows}
+            if int(district_id) not in allowed_dids:
+                raise PermissionError("You do not have jurisdiction over this district.")
+
+        old_flag = int(row["allow_self_claim"] or 0)
+        conn.execute(
+            "UPDATE districts SET allow_self_claim = ? WHERE id = ?",
+            (flag, int(district_id)),
+        )
+        conn.execute(
+            """
+            INSERT INTO location_load_logs
+                (source_path, default_state, total_rows, loaded_areas, loaded_pincodes,
+                 skipped_rows, mandal_level_present, notes, loaded_at)
+            VALUES ('admin_config', ?, 0, 0, 0, 0, 0, ?, ?)
+            """,
+            (
+                get_default_state_name(),
+                f"Actor {actor.get('username', '') if actor else 'system'} changed self_claim for district "
+                f"{row['name']} ({district_id}): {bool(old_flag)} -> {bool(flag)}",
+                _db.utc_now_str(),
+            ),
+        )
+        updated = conn.execute("SELECT * FROM districts WHERE id = ?", (int(district_id),)).fetchone()
+    return dict(updated)

@@ -269,6 +269,12 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
 
         db_mod.init_db()
         db_mod.seed_demo_accounts()
+        with db_mod.get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO states (id, name, code, is_active) VALUES (1, 'Andhra Pradesh', 'AP', 1)")
+            conn.execute("INSERT OR IGNORE INTO districts (id, state_id, name, is_active, allow_self_claim) VALUES (1, 1, 'Guntur', 1, 0)")
+            conn.execute("INSERT OR IGNORE INTO areas (id, district_id, name, latitude, longitude, is_active) VALUES (1, 1, 'Arundelpet S.O', 16.3067, 80.4365, 1)")
+            conn.execute("INSERT OR IGNORE INTO pincodes (pincode, area_id, district_id, state_id) VALUES ('522002', 1, 1, 1)")
+            conn.commit()
         cls.auth = auth_mod
         cls.comp = comp_mod
         cls.dept_mod = dept_mod
@@ -280,6 +286,8 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
         cls.superadmin = cls.auth.change_own_password(sa, "SeedTest@123", "SuperPass@123")
         adm = cls.auth.login("admin", "SeedTest@123")
         cls.admin = cls.auth.change_own_password(adm, "SeedTest@123", "AdminPass@123")
+        cls.auth.update_admin_jurisdiction(cls.superadmin, cls.admin["id"], [1])
+        cls.admin = cls.auth.login("admin", "AdminPass@123")
         cls.citizen = cls.auth.register("dur_citizen", "Dur Citizen", "Pass@1234")
         cls.depts = {d["name"]: d for d in cls.dept_mod.get_active_departments()}
 
@@ -340,6 +348,8 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
             self.depts["Sanitation"]["id"],
             "Sewage drain overflowing near market lane for ages causing foul smell",
             "Market Street",
+            pincode="522002",
+            area_id=1,
         )
         detail = next(c for c in self.comp.get_complaints(self.citizen) if c["incident_id"] == inc)
         self.assertEqual(detail["duration_hours"], 168.0)
@@ -368,6 +378,8 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
             self.depts["Roads"]["id"],
             "Road surface broken forever near old bridge crossing",
             "Old Bridge",
+            pincode="522002",
+            area_id=1,
         )
         dur_logs_2 = self.pr.get_duration_extraction_logs(self.admin)
         self.assertTrue(any(d["incident_id"] == inc_fail and d["status"] == "Failed" for d in dur_logs_2))
@@ -378,6 +390,8 @@ class TestPriorityRulesConfigServiceAndAging(unittest.TestCase):
             self.depts["General / Other"]["id"],
             "Small paint peeling on public park bench near gate",
             "City Park",
+            pincode="522002",
+            area_id=1,
         )
         comp = next(c for c in self.comp.get_complaints(self.citizen) if c["incident_id"] == inc)
         # Ensure starts Low if ML/rule produced Medium

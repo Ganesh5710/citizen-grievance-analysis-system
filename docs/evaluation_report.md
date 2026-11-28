@@ -1,27 +1,28 @@
 # ML Evaluation Report — Citizen Grievance Governance Platform
 
-> **Dataset Notice:** All benchmark numbers below are evaluated on `data/synthetic_complaints.csv` (5,500 **100% synthetic** multilingual Hyderabad civic complaints, `is_synthetic=True`, 192 distinct `template_group` phrasings across 6 departments and 4 language modes: English, Telugu, Hindi, and mixed transliterated text).
+> **Dataset Notice:** All benchmark numbers below were measured on `data/synthetic_complaints.csv` (**8,700 100% synthetic** multilingual civic complaints, `is_synthetic=True`, `528` unique `template_group` phrasings across 6 departments and 4 language modes: English `en`, Telugu `te`, Hindi `hi`, and code-mixed `mixed`). Live/unreviewed DB rows were excluded cleanly during offline evaluation (`--db non_existent_eval.db`).
 
 ---
 
 ## 1. Split Strategy & Leakage Prevention
 
-- **StratifiedGroupKFold (5 folds)** grouped by `template_group`: all paraphrases derived from the same phrasing template stay strictly in either train or validation/test.
-- Held-out test split: **4,421** training rows vs **1,079** unseen-template test rows (`0` overlapping template groups).
-- Library versions recorded in metadata (`grievance_ml_20261128_050455.json`): Python 3.14.3, scikit-learn 1.8.0, pandas 3.0.2, numpy 2.4.4, joblib 1.5.3.
+- **StratifiedGroupKFold (5 folds)** grouped by `template_group`: paraphrases from the same template never cross between train and validation/test folds.
+- Held-out test split: **6,960** training rows vs **1,740** unseen-template test rows (`0` shared template groups).
+- Evaluated artifact version: **`20261128_084902`** (`Python 3.14.3`, `scikit-learn 1.8.0`, `pandas 3.0.2`, `numpy 2.4.4`, `joblib 1.5.3`).
+- **Leakage Check:** Zero ML metrics reach 100% (Department best `0.9224`, Priority best `0.8402`).
 
 ---
 
 ## 2. Department Classification Benchmark (Unseen Templates)
 
-Features: Combined word n-grams `(1, 2)` (`max_features=6,000`) + character n-grams `char_wb (3, 5)` (`max_features=8,000`).
+Features: Combined word TF-IDF `(1, 2)` (`max_features=6,000`, `sublinear_tf=True`) + character TF-IDF `char_wb (3, 5)` (`max_features=8,000`, `sublinear_tf=True`) + `DurationNumericFeatures`.
 
-| Model | CV Acc Mean | CV Macro-F1 (Std) | Held-Out Test Acc | Held-Out Macro-F1 | Weighted-F1 |
-|---|---:|---:|---:|---:|---:|
-| **RandomForest** | **0.8681** | **0.8649** (0.0409) | 0.8563 | 0.8432 | 0.8584 |
-| LinearSVC (Calibrated) | 0.8613 | 0.8546 (0.0528) | **0.8879** | **0.8722** | **0.8880** |
-| LogisticRegression | 0.8249 | 0.8165 (0.0610) | 0.8285 | 0.8128 | 0.8298 |
-| MultinomialNB | 0.7985 | 0.7919 (0.0845) | 0.8109 | 0.7885 | 0.8058 |
+| Model | CV Acc (Std) | CV Macro-F1 (Std) | Test Acc | Macro Prec | Macro Rec | Macro-F1 | Fit (s) | Infer (ms / 1,740) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **LinearSVC (Calibrated)** *(CV Winner)* | **0.9136** (0.0185) | **0.9096** (0.0184) | 0.9224 | 0.9210 | 0.9155 | 0.9174 | 3.32 | 10.63 |
+| LogisticRegression | 0.9067 (0.0187) | 0.9016 (0.0191) | 0.9230 | 0.9201 | 0.9181 | 0.9184 | 1.17 | 3.01 |
+| RandomForest | 0.9000 (0.0235) | 0.8972 (0.0244) | **0.9316** | **0.9340** | **0.9245** | **0.9282** | 3.35 | 43.32 |
+| MultinomialNB | 0.8862 (0.0314) | 0.8836 (0.0309) | 0.8937 | 0.9068 | 0.8944 | 0.8965 | 0.01 | 1.96 |
 
 ![Model Comparison](evaluation_charts/model_comparison.png)
 
@@ -32,53 +33,58 @@ Features: Combined word n-grams `(1, 2)` (`max_features=6,000`) + character n-gr
 
 ## 3. Priority Classification Benchmark & Safety Rule
 
-| Model | CV Acc Mean | CV Macro-F1 (Std) | Held-Out Test Acc | Held-Out Macro-F1 | Weighted-F1 |
-|---|---:|---:|---:|---:|---:|
-| **RandomForest** | **0.7998** | **0.7978** (0.0061) | 0.7813 | 0.7759 | 0.7809 |
-| LinearSVC (Calibrated) | 0.7967 | 0.7920 (0.0095) | 0.7794 | 0.7705 | 0.7764 |
-| LogisticRegression | 0.7855 | 0.7837 (0.0156) | 0.7748 | 0.7712 | 0.7760 |
-| MultinomialNB | 0.7796 | 0.7742 (0.0083) | **0.7831** | 0.7748 | **0.7821** |
+| Model | CV Acc (Std) | CV Macro-F1 (Std) | Test Acc | Macro Prec | Macro Rec | Macro-F1 | Fit (s) | Infer (ms / 1,740) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **LinearSVC (Calibrated)** *(CV & Test Winner)* | **0.8440** (0.0058) | **0.8404** (0.0060) | **0.8402** | **0.8415** | **0.8355** | **0.8367** | 1.52 | 6.89 |
+| RandomForest | 0.8343 (0.0060) | 0.8321 (0.0072) | 0.8144 | 0.8159 | 0.8227 | 0.8135 | 1.76 | 33.67 |
+| LogisticRegression | 0.8339 (0.0092) | 0.8310 (0.0091) | 0.8362 | 0.8340 | 0.8331 | 0.8325 | 0.99 | 1.92 |
+| MultinomialNB | 0.7063 (0.0167) | 0.6992 (0.0144) | 0.7391 | 0.7470 | 0.7305 | 0.7354 | 0.01 | 2.49 |
 
-- **Production Safety Override:** Emergency keywords (`urgent`, `critical`, `emergency`, `danger`, `fire`, `death`, `blast`, `accident`, `sparking`, `electrocution`, `flood`, `live wire`, etc.) always override predicted priority to **High**.
+- **Production Safety Precedence:** `Emergency Keywords > Duration Threshold Rules > ML Prediction > Keyword Rule` (+1 level on recurring complaints). No ML prediction can ever lower an emergency or duration-threshold priority.
 
 ![Priority Confusion Matrix](evaluation_charts/priority_confusion_matrix.png)
 
 ---
 
-## 4. Feature Ablation Study
+## 4. Feature & Preprocessing Ablation Study (Winning Estimator: `LinearSVC_Calibrated`)
 
-| Task | Feature Set | Held-Out Test Acc | Held-Out Macro-F1 |
-|---|---|---:|---:|
-| Department | Word TF-IDF `(1, 2)` only | 0.8758 | 0.8655 |
-| Department | Char TF-IDF `char_wb (3, 5)` only | 0.8387 | 0.8243 |
-| Department | Combined Word + Char TF-IDF | 0.8563 | 0.8432 |
-| Priority | Word TF-IDF `(1, 2)` only | 0.7581 | 0.7640 |
-| Priority | Char TF-IDF `char_wb (3, 5)` only | **0.7896** | **0.7849** |
-| Priority | Combined Word + Char TF-IDF | 0.7813 | 0.7759 |
+| Experiment | Held-Out Dept Acc | Dept Macro-F1 | Held-Out Priority Acc | Priority Macro-F1 |
+|---|---:|---:|---:|---:|
+| `word_unigram_1_1` (TF-IDF `(1,1)`, sublinear) | 0.9034 | 0.9002 | 0.7989 | 0.7925 |
+| `word_bigram_1_2` (TF-IDF `(1,2)`, sublinear) | 0.9103 | 0.9045 | 0.8052 | 0.7992 |
+| `char_wb_3_5` (Char TF-IDF `(3,5)` only) | 0.9034 | 0.9048 | 0.8391 | 0.8356 |
+| `stop_words_english` (`stop_words="english"`) | 0.8672 | 0.8610 | 0.7736 | 0.7686 |
+| `clean_text_enabled` (`model/preprocessing.clean_text`) | 0.6569 | 0.6493 | 0.7569 | 0.7514 |
+| `tfidf_raw_tf` (`sublinear_tf=False`) | 0.8655 | 0.8588 | 0.8000 | 0.7941 |
+| `tfidf_only` (Word `(1,2)` + Char `(3,5)`, sublinear) | 0.9201 | 0.9144 | **0.8460** | **0.8431** |
+| **`both` (Full Production FeatureUnion + Duration Features)** | **0.9224** | **0.9174** | 0.8402 | 0.8367 |
 
-- Character n-grams slightly outperformed word-only TF-IDF on noisy priority phrasing (typos such as `urgnt`, prefixes, Telugu/Hindi suffix cues), while clean word n-grams were sharpest on English department terminology. Keeping the union preserves robustness across English, Telugu, Hindi, and mixed transliteration.
+### Key Ablation Takeaways
+- **Why ASCII-only text cleaning (`clean_text`) hurts:** Applying `re.sub(r"[^a-zA-Z\s]", "", text)` strips Devanagari and Telugu script characters as well as numeric duration tokens (`3 days`, `48 hours`), collapsing Department Macro-F1 from **0.9144 -> 0.6493** (-26.5 points). Raw Unicode preservation is essential.
+- **Why English stopwords harm priority & mixed phrasing:** Removing words such as `"no"`, `"not"`, `"for"`, `"since"`, `"days"` degrades priority (`0.7992 -> 0.7686`) and department (`0.9045 -> 0.8610`).
+- **Character n-grams + `sublinear_tf=True`:** Sublinear TF scaling (`1 + log(tf)`) outperforms raw TF (`0.9045` vs `0.8588` dept F1), and `char_wb (3,5)` is the single strongest feature block for noisy multilingual priority text (`0.8356` priority F1).
 
 ---
 
-## 5. Multilingual Bias & Subgroup Evaluation
+## 5. Multilingual Bias & Subgroup Evaluation (`n = 1,740` Held-Out Rows)
 
 | Language Slice | Support (n) | Dept Acc | Dept Macro-F1 | Priority Acc | Priority Macro-F1 |
 |---|---:|---:|---:|---:|---:|
-| `en` (English) | 585 | 0.8598 | 0.8398 | 0.7744 | 0.7704 |
-| `te` (Telugu) | 212 | 0.8774 | 0.8627 | 0.7925 | 0.7871 |
-| `hi` (Hindi) | 101 | 0.9010 | 0.5960 | 0.7723 | 0.7803 |
-| `mixed` (Code-mixed) | 181 | 0.7956 | 0.7214 | 0.7956 | 0.7895 |
+| `en` (English) | 983 | 0.9207 | 0.9179 | 0.8372 | 0.8362 |
+| `hi` (Hindi) | 350 | 0.8857 | 0.8791 | 0.8543 | 0.8502 |
+| `te` (Telugu) | 259 | 0.9653 | 0.9527 | 0.8726 | 0.8594 |
+| `mixed` (Code-mixed) | 148 | 0.9459 | 0.9386 | 0.7703 | 0.7628 |
 
-- **Fairness Observation:** Hindi (`hi`) achieved high raw accuracy (`0.9010`) on the held-out split, but lower macro-F1 (`0.5960`) because only 101 held-out Hindi samples appeared across fewer template groups, amplifying errors on minority classes (`General / Other`). Mixed transliteration (`mixed`, 79.56% acc) sits ~6 points below `en`/`te` due to spelling variance without strict transliteration normalization. Collecting more real multilingual citizen feedback in Review Queue directly improves future candidate versions.
+- **Honest Bias Discussion:** Notice `mixed` code-switched complaints (English + transliterated Telugu/Hindi, e.g., `"tap water muddy ga vastundi"`) score **0.7628** Priority Macro-F1 vs **0.8594** for native-script Telugu (`te`). Transliterated phrasing varies heavily in spelling (`"vastundi"` / `"vasthundi"`, `"nhi"` / `"nahi"`), and `mixed` also has lower training support (`148` held-out rows), creating urgency-calibration variance across informal Hinglish/Tenglish text. Collecting human-verified Admin corrections through `priority_feedback_log` directly reduces this gap over time.
 
 ---
 
 ## 6. Error Analysis
 
-Top department confusion pairs on unseen test templates (`grievance_ml_20261128_050455.json`):
-1. **Electricity -> General / Other (44):** Held-out substation/pole phrasing lacking frequent keywords (`substation`, `fuse`) landed near generic infrastructure.
-2. **General / Other -> Roads (14):** Complaints mentioning `"walkway"` or `"ring road junction"` overlapped lexically with Roads complaints.
-3. **Electricity -> Roads (12):** Pole/junction location tokens overlapped with street road templates.
-4. **Sanitation / Water -> Roads (8 each):** Flooded lanes and dug-up drains share road-surface vocabulary.
+Top held-out department confusion pairs (`grievance_ml_20261128_084902.json`):
+1. **Traffic -> General / Other (20):** Informal parking/obstruction templates lacked strong keywords (`signal`, `junction`).
+2. **Water -> Roads (17):** Complaints mentioning waterlogging or broken pipelines along named road corridors shared roadway vocabulary (`ring road`, `junction`).
+3. **General / Other -> Roads (16):** Sidewalk/obstruction items near main roads overlapped with road maintenance terms.
+4. **Sanitation -> Roads (7) / General / Other -> Water (7):** Drain overflow and roadside dumping share mixed street context.
 
-Because citizen department choices are **never blocked** and disagreements / `< 0.60` confidence cases enter the Admin `Review Queue`, ambiguous edge cases receive human oversight and feed into future retraining cycles.
+Top priority confusion pairs centered around **Medium <-> Low (`87` + `80`)** when complaints lacked explicit numeric durations, which is mitigated in production by the Review Queue + deterministic duration rules.
