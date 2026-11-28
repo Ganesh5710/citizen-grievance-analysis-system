@@ -18,6 +18,7 @@ from core.images import (
 from core.permissions import require
 from core.security import sanitize_text
 from core.sla import AUTO_CLOSE_DAYS, compute_due_at, parse_utc
+from core.wards import find_nearest_ward
 
 VALID_STATUSES = ("Pending", "Assigned", "In Progress", "Resolved", "Reopened", "Closed")
 VALID_PRIORITIES = ("High", "Medium", "Low")
@@ -79,6 +80,10 @@ def _row_to_complaint(row, photo_count: int = 0, now: datetime | None = None) ->
         "department_id":        row["department_id"],
         "department":           row["department_name"],
         "department_is_active": bool(row["department_is_active"]),
+        "ward_id":              row["ward_id"],
+        "ward_name":            row["ward_name"],
+        "latitude":             row["latitude"],
+        "longitude":            row["longitude"],
         "priority":             row["priority"],
         "status":               status,
         "assigned_to":          row["assigned_to"],
@@ -107,6 +112,10 @@ SELECT c.id,
        c.department_id,
        d.name AS department_name,
        d.is_active AS department_is_active,
+       c.ward_id,
+       w.name AS ward_name,
+       c.latitude,
+       c.longitude,
        c.priority,
        c.status,
        c.assigned_to,
@@ -123,6 +132,7 @@ SELECT c.id,
 FROM complaints c
 JOIN departments d ON d.id = c.department_id
 JOIN users u ON u.id = c.user_id
+LEFT JOIN wards w ON w.id = c.ward_id
 LEFT JOIN users emp ON emp.id = c.assigned_to
 """
 
@@ -133,6 +143,9 @@ def submit_complaint(
     text: str,
     location: str,
     files: list | tuple | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    ward_id: int | None = None,
 ) -> str:
     """
     Requires 'submit_complaint' permission (only 'user' role).
@@ -166,6 +179,12 @@ def submit_complaint(
     now_dt = _utc_now()
     now_str = _fmt_dt(now_dt)
 
+    resolved_ward_id = ward_id
+    if resolved_ward_id is None and latitude is not None and longitude is not None:
+        nearest = find_nearest_ward(float(latitude), float(longitude))
+        if nearest:
+            resolved_ward_id = nearest["id"]
+
     with closing(_db.get_connection()) as conn, conn:
         dept = conn.execute(
             "SELECT id, name, is_active FROM departments WHERE id = ?",
@@ -173,6 +192,11 @@ def submit_complaint(
         ).fetchone()
         if dept is None or not dept["is_active"]:
             raise ValueError("Selected department does not exist or is inactive.")
+
+        if resolved_ward_id is not None:
+            w_row = conn.execute("SELECT id FROM wards WHERE id = ?", (resolved_ward_id,)).fetchone()
+            if w_row is None:
+                raise ValueError("Selected ward does not exist.")
 
         due_at = compute_due_at(conn, department_id, priority, now_dt)
         assignee = _pick_least_loaded_employee(conn, department_id)
@@ -182,10 +206,10 @@ def submit_complaint(
         cursor = conn.execute(
             """
             INSERT INTO complaints
-                (incident_id, user_id, text, location, department_id, priority, status,
-                 assigned_to, assigned_at, due_at, escalation_level, reopen_count,
+                (incident_id, user_id, text, location, department_id, ward_id, latitude, longitude,
+                 priority, status, assigned_to, assigned_at, due_at, escalation_level, reopen_count,
                  is_deleted, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, 0, 0, 0, ?, ?)
             """,
             (
                 incident_id,
@@ -193,6 +217,9 @@ def submit_complaint(
                 clean_text,
                 clean_location,
                 department_id,
+                resolved_ward_id,
+                float(latitude) if latitude is not None else None,
+                float(longitude) if longitude is not None else None,
                 priority,
                 assigned_to,
                 assigned_at,

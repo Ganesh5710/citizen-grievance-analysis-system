@@ -4,11 +4,12 @@ Authenticates users, enforces forced temporary-password resets, and routes by ro
 Follows Streamlit's native Light / Dark / System theme.
 """
 
+from datetime import datetime, timezone
 import html
 
 import streamlit as st
 
-from core.auth import change_own_password, login, register
+from core.auth import change_own_password, is_session_expired, login, register
 import core.database as _db
 from ui.shared import inject_shared_css, render_html
 
@@ -26,15 +27,14 @@ if "user" not in st.session_state:
     st.session_state.user = None
 
 if "default_pw_active" not in st.session_state:
-    st.session_state.default_pw_active = _db.has_default_demo_passwords()
+    st.session_state.default_pw_active = _db.has_pending_seed_password_reset()
 
 
 def _show_default_password_warning() -> None:
     if st.session_state.get("default_pw_active"):
         st.warning(
-            "Default demo passwords are still active for seeded accounts "
-            "(`superadmin`, `admin`, `employee` — password `Admin@123`). "
-            "Change them before production deployment."
+            "Seeded staff accounts require a password change on first login. "
+            "Use the one-time passwords printed at startup or configured in .env."
         )
 
 
@@ -73,9 +73,14 @@ def render_auth_page() -> None:
                     user = login(username.strip(), password)
                     if user:
                         st.session_state.user = user
+                        st.session_state["last_activity_utc"] = datetime.now(timezone.utc).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
                         st.rerun()
                     else:
-                        st.error("Invalid username or password, or account is deactivated.")
+                        st.error(
+                            "Invalid credentials, account is deactivated, or login is temporarily locked."
+                        )
 
         with tab_signup:
             st.info("Public sign-up creates a Citizen account only.")
@@ -138,7 +143,7 @@ def render_forced_password_change(user: dict) -> None:
                 try:
                     updated_user = change_own_password(user, cur_pw, new_pw)
                     st.session_state.user = updated_user
-                    st.session_state.default_pw_active = _db.has_default_demo_passwords()
+                    st.session_state.default_pw_active = _db.has_pending_seed_password_reset()
                     st.success("Password updated successfully.")
                     st.rerun()
                 except (PermissionError, ValueError) as exc:
@@ -176,6 +181,21 @@ def render_topbar(user: dict) -> None:
 
 def main() -> None:
     user = st.session_state.get("user")
+
+    if user is not None:
+        last_act = st.session_state.get("last_activity_utc")
+        if is_session_expired(last_act):
+            _clear_app_session()
+            st.session_state["session_timeout_notice"] = (
+                "Your session timed out after 30 minutes of inactivity. Please log in again."
+            )
+            st.rerun()
+        st.session_state["last_activity_utc"] = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+    if "session_timeout_notice" in st.session_state:
+        st.warning(st.session_state.pop("session_timeout_notice"))
 
     if user is None:
         render_auth_page()

@@ -29,6 +29,7 @@ _TMP_DB = os.path.join(_TMP_DIR, "test_complaints.db")
 _TMP_UPLOADS = os.path.join(_TMP_DIR, "uploads")
 os.environ["CGS_DB_PATH"] = _TMP_DB
 os.environ["CGS_UPLOADS_DIR"] = _TMP_UPLOADS
+os.environ["CGS_SEED_PASSWORD"] = "SeedTest@123"
 
 import core.auth as auth_mod
 import core.classifier as classifier_mod
@@ -38,6 +39,7 @@ import core.departments as dept_mod
 import core.images as img_mod
 import core.performance as perf_mod
 import core.sla as sla_mod
+import core.wards as ward_mod
 
 
 def _make_image_bytes(fmt: str = "JPEG", size: tuple[int, int] = (200, 150), with_exif: bool = False) -> bytes:
@@ -61,12 +63,17 @@ def tearDownModule():
 class TestCitizenGrievanceFullSuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.superadmin = auth_mod.login("superadmin", "Admin@123")
-        assert cls.superadmin is not None
-        cls.admin_demo = auth_mod.login("admin", "Admin@123")
-        assert cls.admin_demo is not None
-        cls.emp_water_1 = auth_mod.login("employee", "Admin@123")
-        assert cls.emp_water_1 is not None
+        sa_first = auth_mod.login("superadmin", "SeedTest@123")
+        assert sa_first is not None and sa_first["must_change_password"] is True
+        cls.superadmin = auth_mod.change_own_password(sa_first, "SeedTest@123", "SuperSecret@123")
+
+        adm_first = auth_mod.login("admin", "SeedTest@123")
+        assert adm_first is not None and adm_first["must_change_password"] is True
+        cls.admin_demo = auth_mod.change_own_password(adm_first, "SeedTest@123", "AdminSecret@123")
+
+        emp_first = auth_mod.login("employee", "SeedTest@123")
+        assert emp_first is not None and emp_first["must_change_password"] is True
+        cls.emp_water_1 = auth_mod.change_own_password(emp_first, "SeedTest@123", "EmpSecret@123")
 
         cls.depts = dept_mod.get_active_departments()
         cls.water = next(d for d in cls.depts if d["name"] == "Water")
@@ -632,6 +639,86 @@ class TestCitizenGrievanceFullSuite(unittest.TestCase):
         finally:
             if prev is not None:
                 os.environ["CGS_DB_PATH"] = prev
+
+    # ==================================================================
+    # PHASE 0: HARDENING, LOCKOUT, SESSION TIMEOUT, WAL, WARDS, SYNTHETIC
+    # ==================================================================
+
+    def test_15_phase0_hardening_wards_and_synthetic_data(self):
+        # WAL mode and busy_timeout enabled
+        conn = db_mod.get_connection()
+        try:
+            jm = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            bt = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            self.assertEqual(str(jm).lower(), "wal")
+            self.assertGreaterEqual(int(bt), 5000)
+        finally:
+            conn.close()
+
+        # Random one-time seed generation when no env password is set
+        rand_db = os.path.join(_TMP_DIR, "rand_seed.db")
+        prev_db = os.environ.get("CGS_DB_PATH")
+        prev_seed = os.environ.pop("CGS_SEED_PASSWORD", None)
+        try:
+            os.environ["CGS_DB_PATH"] = rand_db
+            db_mod.init_db()
+            creds = db_mod.seed_demo_accounts()
+            self.assertEqual(set(creds.keys()), {"superadmin", "admin", "employee"})
+            for uname, pw in creds.items():
+                self.assertGreaterEqual(len(pw), 12)
+                self.assertNotEqual(pw, "Admin@123")
+                logged = auth_mod.login(uname, pw)
+                self.assertIsNotNone(logged)
+                self.assertTrue(logged["must_change_password"])
+        finally:
+            if prev_seed is not None:
+                os.environ["CGS_SEED_PASSWORD"] = prev_seed
+            if prev_db is not None:
+                os.environ["CGS_DB_PATH"] = prev_db
+
+        # Rate limiting: 5 failures lock for 5 minutes
+        lock_user = auth_mod.register("lock_victim", "Lock Victim", "RightPass@1")
+        t0 = datetime(2026, 11, 28, 10, 0, 0, tzinfo=timezone.utc)
+        for idx in range(5):
+            self.assertIsNone(auth_mod.login("lock_victim", f"WrongPass{idx}", now=t0 + timedelta(seconds=idx)))
+        self.assertTrue(auth_mod.is_login_locked("lock_victim", now=t0 + timedelta(minutes=2)))
+        # Even the right password is rejected while locked
+        self.assertIsNone(auth_mod.login("lock_victim", "RightPass@1", now=t0 + timedelta(minutes=3)))
+        # After 5 minutes lockout expires and right password works
+        self.assertFalse(auth_mod.is_login_locked("lock_victim", now=t0 + timedelta(minutes=6)))
+        self.assertIsNotNone(auth_mod.login("lock_victim", "RightPass@1", now=t0 + timedelta(minutes=6)))
+
+        # 30-minute session timeout
+        self.assertFalse(auth_mod.is_session_expired(t0, now=t0 + timedelta(minutes=29)))
+        self.assertTrue(auth_mod.is_session_expired(t0, now=t0 + timedelta(minutes=31)))
+
+        # Hyderabad wards seeded & nearest ward assigned automatically from coordinates
+        wards = ward_mod.get_all_wards()
+        self.assertGreaterEqual(len(wards), 15)
+        nearest = ward_mod.find_nearest_ward(17.4486, 78.3908)
+        self.assertEqual(nearest["name"], "Madhapur")
+        inc_w = comp_mod.submit_complaint(
+            lock_user,
+            self.water["id"],
+            "Water pipe leaking near cyber towers",
+            "Madhapur Main",
+            latitude=17.4490,
+            longitude=78.3910,
+        )
+        saved_w = next(c for c in comp_mod.get_complaints(lock_user) if c["incident_id"] == inc_w)
+        self.assertEqual(saved_w["ward_name"], "Madhapur")
+
+        # Synthetic dataset exists, >= 5000 rows, multilingual, marked is_synthetic=True
+        import csv
+        csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "synthetic_complaints.csv")
+        self.assertTrue(os.path.exists(csv_path))
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        self.assertGreaterEqual(len(rows), 5000)
+        langs = {r["language"] for r in rows}
+        self.assertEqual(langs, {"en", "te", "hi", "mixed"})
+        self.assertTrue(all(r["is_synthetic"] == "True" for r in rows))
+
 
 
 if __name__ == "__main__":

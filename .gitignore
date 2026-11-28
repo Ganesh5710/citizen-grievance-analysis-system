@@ -10,11 +10,15 @@ __pycache__/
 venv/
 env/
 
-# Database (runtime artifact)
-complaints.db
+# Environment secrets
+.env
 
-# Uploaded complaint photos (runtime user uploads)
+# Runtime artifacts
+complaints.db
+complaints.db-wal
+complaints.db-shm
 uploads/
+logs/
 
 # Jupyter
 .ipynb_checkpoints/

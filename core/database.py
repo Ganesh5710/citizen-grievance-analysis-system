@@ -1,6 +1,6 @@
 """
-Database bootstrap: connection factory, schema init, migrations, and seeding.
-Importing this module initializes the SQLite database.
+Database bootstrap: SQLite WAL + busy_timeout connection factory, schema init,
+migrations, Hyderabad wards seeding, SLA seeding, and hardened one-time account seeding.
 """
 
 from contextlib import closing
@@ -9,7 +9,11 @@ import os
 from pathlib import Path
 import sqlite3
 
-from core.security import hash_password, verify_password
+from core.config import get_env_str
+from core.logging_setup import get_logger
+from core.security import generate_temp_password, hash_password
+
+_logger = get_logger("database")
 
 # ---------------------------------------------------------------------------
 # Path
@@ -31,9 +35,11 @@ DB_PATH: Path = get_db_path()
 
 
 def get_connection() -> sqlite3.Connection:
-    """Return an open SQLite connection with row_factory and FK enforcement."""
-    conn = sqlite3.connect(str(get_db_path()))
+    """Return an open SQLite connection with WAL mode, busy_timeout, row_factory, and FK enforcement."""
+    conn = sqlite3.connect(str(get_db_path()), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -51,17 +57,38 @@ CREATE TABLE IF NOT EXISTS departments (
     created_at  TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS wards (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    name    TEXT UNIQUE NOT NULL,
+    lat     REAL NOT NULL,
+    lon     REAL NOT NULL,
+    polygon TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS users (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    username             TEXT UNIQUE NOT NULL,
-    full_name            TEXT NOT NULL,
-    password_hash        TEXT NOT NULL,
-    salt                 TEXT NOT NULL,
-    role                 TEXT NOT NULL CHECK(role IN ('user','employee','admin','super_admin')),
-    department_id        INTEGER REFERENCES departments(id),
-    is_active            INTEGER NOT NULL DEFAULT 1,
-    must_change_password INTEGER NOT NULL DEFAULT 0,
-    created_at           TEXT DEFAULT (datetime('now'))
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    username              TEXT UNIQUE NOT NULL,
+    full_name             TEXT NOT NULL,
+    password_hash         TEXT NOT NULL,
+    salt                  TEXT NOT NULL,
+    role                  TEXT NOT NULL CHECK(role IN ('user','employee','admin','super_admin')),
+    department_id         INTEGER REFERENCES departments(id),
+    is_active             INTEGER NOT NULL DEFAULT 1,
+    must_change_password  INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until          TEXT,
+    preferred_language    TEXT NOT NULL DEFAULT 'en',
+    phone                 TEXT DEFAULT '',
+    email                 TEXT DEFAULT '',
+    email_notifications   INTEGER NOT NULL DEFAULT 1,
+    created_at            TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+    username        TEXT PRIMARY KEY,
+    failed_count    INTEGER NOT NULL DEFAULT 0,
+    locked_until    TEXT,
+    last_attempt_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sla_policies (
@@ -80,6 +107,9 @@ CREATE TABLE IF NOT EXISTS complaints (
     text             TEXT NOT NULL,
     location         TEXT NOT NULL DEFAULT '',
     department_id    INTEGER NOT NULL REFERENCES departments(id),
+    ward_id          INTEGER REFERENCES wards(id),
+    latitude         REAL,
+    longitude        REAL,
     priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
     status           TEXT NOT NULL DEFAULT 'Pending'
                          CHECK(status IN ('Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
@@ -145,18 +175,34 @@ _DEFAULT_DEPARTMENTS = [
     ("General / Other", "Civic grievances not covered by specialized departments"),
 ]
 
+_HYDERABAD_WARDS = [
+    ("Banjara Hills", 17.4156, 78.4347),
+    ("Jubilee Hills", 17.4326, 78.4071),
+    ("Madhapur",      17.4486, 78.3908),
+    ("Gachibowli",    17.4401, 78.3489),
+    ("Kondapur",      17.4622, 78.3568),
+    ("Kukatpally",    17.4948, 78.3996),
+    ("Miyapur",       17.4968, 78.3614),
+    ("Secunderabad",  17.4399, 78.4983),
+    ("Begumpet",      17.4447, 78.4664),
+    ("Ameerpet",      17.4375, 78.4483),
+    ("Abids",         17.3914, 78.4765),
+    ("Charminar",     17.3616, 78.4747),
+    ("Dilsukhnagar",  17.3688, 78.5247),
+    ("LB Nagar",      17.3457, 78.5522),
+    ("Uppal",         17.4058, 78.5591),
+]
+
 DEFAULT_SLA_HOURS: dict[str, int] = {
     "High":   8,
     "Medium": 48,
     "Low":    120,
 }
 
-DEFAULT_DEMO_PASSWORD = "Admin@123"
-
-_DEMO_ACCOUNTS = [
-    ("superadmin", "Super Admin",  "super_admin", DEFAULT_DEMO_PASSWORD, None),
-    ("admin",      "Admin User",   "admin",       DEFAULT_DEMO_PASSWORD, None),
-    ("employee",   "Employee One", "employee",    DEFAULT_DEMO_PASSWORD, "Water"),
+_DEMO_ACCOUNT_SPECS = [
+    ("superadmin", "Super Admin",  "super_admin", None,    "CGS_SEED_SUPERADMIN_PASSWORD"),
+    ("admin",      "Admin User",   "admin",       None,    "CGS_SEED_ADMIN_PASSWORD"),
+    ("employee",   "Employee One", "employee",    "Water", "CGS_SEED_EMPLOYEE_PASSWORD"),
 ]
 
 
@@ -177,7 +223,7 @@ def _table_sql(conn: sqlite3.Connection, table_name: str) -> str:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
         (table_name,),
     ).fetchone()
-    return (row["sql"] if row and row["sql"] else "")
+    return row["sql"] if row and row["sql"] else ""
 
 
 def _seed_departments_in_conn(conn: sqlite3.Connection) -> None:
@@ -197,6 +243,14 @@ def _seed_departments_in_conn(conn: sqlite3.Connection) -> None:
                 "INSERT INTO departments (name, description, is_active) VALUES (?, ?, 1)",
                 _DEFAULT_DEPARTMENTS[-1],
             )
+
+
+def _seed_wards_in_conn(conn: sqlite3.Connection) -> None:
+    for name, lat, lon in _HYDERABAD_WARDS:
+        conn.execute(
+            "INSERT OR IGNORE INTO wards (name, lat, lon, polygon) VALUES (?, ?, ?, '')",
+            (name, lat, lon),
+        )
 
 
 def _seed_sla_policies_in_conn(conn: sqlite3.Connection) -> None:
@@ -226,15 +280,21 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
     cols = _table_columns(conn, "users")
     if not cols:
         return
-    if "department_id" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN department_id INTEGER REFERENCES departments(id)")
-    if "is_active" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-    if "must_change_password" not in cols:
-        conn.execute(
-            "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
-        )
-    # Assign seeded demo employee to Water if still unassigned
+    add_cols = [
+        ("department_id",         "INTEGER REFERENCES departments(id)"),
+        ("is_active",             "INTEGER NOT NULL DEFAULT 1"),
+        ("must_change_password",  "INTEGER NOT NULL DEFAULT 0"),
+        ("failed_login_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("locked_until",          "TEXT"),
+        ("preferred_language",    "TEXT NOT NULL DEFAULT 'en'"),
+        ("phone",                 "TEXT DEFAULT ''"),
+        ("email",                 "TEXT DEFAULT ''"),
+        ("email_notifications",   "INTEGER NOT NULL DEFAULT 1"),
+    ]
+    for col_name, col_def in add_cols:
+        if col_name not in cols:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
+
     water = conn.execute("SELECT id FROM departments WHERE name = 'Water'").fetchone()
     if water:
         conn.execute(
@@ -248,9 +308,12 @@ def _migrate_complaint_updates(conn: sqlite3.Connection) -> None:
     cols = _table_columns(conn, "complaint_updates")
     if not cols:
         return
-
     ddl = _table_sql(conn, "complaint_updates")
-    needs_rebuild = "employee_id  INTEGER NOT NULL" in ddl or "employee_id INTEGER NOT NULL" in ddl or "actor_label" not in cols
+    needs_rebuild = (
+        "employee_id  INTEGER NOT NULL" in ddl
+        or "employee_id INTEGER NOT NULL" in ddl
+        or "actor_label" not in cols
+    )
     if not needs_rebuild:
         if "field_name" not in cols:
             conn.execute(
@@ -307,18 +370,8 @@ def _migrate_complaint_updates(conn: sqlite3.Connection) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                r["id"],
-                r["complaint_id"],
-                r["employee_id"],
-                actor,
-                field_name,
-                old_status,
-                new_status,
-                old_val,
-                new_val,
-                src,
-                r["remark"] or "",
-                r["created_at"],
+                r["id"], r["complaint_id"], r["employee_id"], actor, field_name,
+                old_status, new_status, old_val, new_val, src, r["remark"] or "", r["created_at"],
             ),
         )
 
@@ -331,7 +384,6 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
     if not cols:
         return
 
-    # Week 1-4 legacy table (no incident_id column)
     if "incident_id" not in cols:
         legacy_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='complaints_legacy_v1'"
@@ -344,8 +396,8 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
 
     ddl = _table_sql(conn, "complaints")
     required_cols = {
-        "department_id", "assigned_to", "assigned_at", "due_at",
-        "escalation_level", "resolved_at", "reopen_count", "is_deleted",
+        "department_id", "ward_id", "latitude", "longitude", "assigned_to", "assigned_at",
+        "due_at", "escalation_level", "resolved_at", "reopen_count", "is_deleted",
     }
     needs_rebuild = (
         not required_cols.issubset(cols)
@@ -373,6 +425,9 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
             text             TEXT NOT NULL,
             location         TEXT NOT NULL DEFAULT '',
             department_id    INTEGER NOT NULL REFERENCES departments(id),
+            ward_id          INTEGER REFERENCES wards(id),
+            latitude         REAL,
+            longitude        REAL,
             priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
             status           TEXT NOT NULL DEFAULT 'Pending'
                                  CHECK(status IN ('Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
@@ -401,6 +456,9 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
         due_at = (r["due_at"] if "due_at" in cols else None) or _compute_due_at_from(
             r["created_at"], target_hours
         )
+        ward_id = r["ward_id"] if "ward_id" in cols else None
+        lat = r["latitude"] if "latitude" in cols else None
+        lon = r["longitude"] if "longitude" in cols else None
         assigned_to = r["assigned_to"] if "assigned_to" in cols else None
         assigned_at = r["assigned_at"] if "assigned_at" in cols else None
         esc_level = (r["escalation_level"] if "escalation_level" in cols else 0) or 0
@@ -413,29 +471,17 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO complaints_new
-                (id, incident_id, user_id, text, location, department_id, priority, status,
-                 assigned_to, assigned_at, due_at, escalation_level, resolved_at, reopen_count,
-                 is_deleted, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, incident_id, user_id, text, location, department_id, ward_id,
+                 latitude, longitude, priority, status, assigned_to, assigned_at,
+                 due_at, escalation_level, resolved_at, reopen_count, is_deleted,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                r["id"],
-                r["incident_id"],
-                r["user_id"],
-                r["text"],
-                r["location"] or "",
-                mapped_dept_id,
-                prio,
-                r["status"],
-                assigned_to,
-                assigned_at,
-                due_at,
-                esc_level,
-                resolved_at,
-                reopen_count,
-                is_del,
-                r["created_at"],
-                r["updated_at"],
+                r["id"], r["incident_id"], r["user_id"], r["text"], r["location"] or "",
+                mapped_dept_id, ward_id, lat, lon, prio, r["status"],
+                assigned_to, assigned_at, due_at, esc_level, resolved_at, reopen_count,
+                is_del, r["created_at"], r["updated_at"],
             ),
         )
 
@@ -448,9 +494,11 @@ def init_db() -> None:
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = OFF")
         with conn:
             conn.execute("""
@@ -460,6 +508,15 @@ def init_db() -> None:
                     description TEXT NOT NULL DEFAULT '',
                     is_active   INTEGER NOT NULL DEFAULT 1,
                     created_at  TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wards (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name    TEXT UNIQUE NOT NULL,
+                    lat     REAL NOT NULL,
+                    lon     REAL NOT NULL,
+                    polygon TEXT DEFAULT ''
                 )
             """)
             conn.execute("""
@@ -473,41 +530,65 @@ def init_db() -> None:
                 )
             """)
             _seed_departments_in_conn(conn)
+            _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
             _migrate_users(conn)
             _migrate_complaints(conn)
             _migrate_complaint_updates(conn)
             conn.executescript(_SCHEMA_SQL)
             _seed_departments_in_conn(conn)
+            _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
         conn.execute("PRAGMA foreign_keys = ON")
     finally:
         conn.close()
 
 
-def seed_demo_accounts() -> bool:
+def seed_demo_accounts() -> dict[str, str]:
     """
-    Insert demo accounts only when the users table is empty.
-    Returns True if seeding happened, False if skipped.
+    Insert initial staff accounts ONLY when the users table is empty.
+    Reads optional password overrides from environment variables; otherwise generates a
+    random password per account and prints it once. Always forces password change on first login.
+    Returns {username: generated_password} for freshly seeded accounts (empty dict if skipped).
     """
     with closing(get_connection()) as conn, conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count > 0:
-            return False
+            return {}
 
         dept_rows = conn.execute("SELECT id, name FROM departments").fetchall()
         dept_map = {r["name"]: r["id"] for r in dept_rows}
+        fallback_env = get_env_str("CGS_SEED_PASSWORD", "")
 
-        for username, full_name, role, password, dept_name in _DEMO_ACCOUNTS:
-            pw_hash, salt = hash_password(password)
+        seeded_creds: dict[str, str] = {}
+        for username, full_name, role, dept_name, env_key in _DEMO_ACCOUNT_SPECS:
+            raw_pw = get_env_str(env_key, "") or fallback_env
+            generated = False
+            if not raw_pw:
+                raw_pw = generate_temp_password(14)
+                generated = True
+
+            pw_hash, salt = hash_password(raw_pw)
             dept_id = dept_map.get(dept_name) if dept_name else None
             conn.execute(
-                "INSERT INTO users "
-                "(username, full_name, password_hash, salt, role, department_id, is_active, must_change_password) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, 0)",
+                """
+                INSERT INTO users
+                    (username, full_name, password_hash, salt, role, department_id,
+                     is_active, must_change_password)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 1)
+                """,
                 (username, full_name, pw_hash, salt, role, dept_id),
             )
-        return True
+            seeded_creds[username] = raw_pw
+            if generated:
+                _logger.info("Seeded initial account '%s' with generated one-time password.", username)
+
+        if any(not get_env_str(spec[4], "") and not fallback_env for spec in _DEMO_ACCOUNT_SPECS):
+            print("[FIRST-RUN SEED] Generated one-time passwords (password change forced on first login):")
+            for uname, pw in seeded_creds.items():
+                print(f"  {uname}: {pw}")
+
+        return seeded_creds
 
 
 def seed_departments() -> bool:
@@ -521,19 +602,16 @@ def seed_departments() -> bool:
         return True
 
 
-def has_default_demo_passwords() -> bool:
-    """Return True if any seeded demo account still uses DEFAULT_DEMO_PASSWORD."""
-    usernames = [acct[0] for acct in _DEMO_ACCOUNTS]
+def has_pending_seed_password_reset() -> bool:
+    """Return True if any seeded staff account still has must_change_password = 1."""
+    usernames = [spec[0] for spec in _DEMO_ACCOUNT_SPECS]
     placeholders = ",".join("?" for _ in usernames)
     with closing(get_connection()) as conn:
-        rows = conn.execute(
-            f"SELECT password_hash, salt FROM users WHERE username IN ({placeholders})",
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM users WHERE username IN ({placeholders}) AND must_change_password = 1",
             tuple(usernames),
-        ).fetchall()
-    return any(
-        verify_password(DEFAULT_DEMO_PASSWORD, row["password_hash"], row["salt"])
-        for row in rows
-    )
+        ).fetchone()[0]
+    return count > 0
 
 
 # ---------------------------------------------------------------------------
