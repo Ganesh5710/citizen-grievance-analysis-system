@@ -6,9 +6,25 @@ Follows Streamlit's native Light / Dark / System theme.
 
 from datetime import datetime, timezone
 import html
+import importlib
+import sys
 
 import pandas as pd
 import streamlit as st
+
+# If Streamlit Cloud hot-reloads app.py inside an existing Python process after git pull,
+# evict stale cached submodules before importing new symbols.
+_PRE_DB = sys.modules.get("core.database")
+_PRE_AUTH = sys.modules.get("core.auth")
+if (_PRE_DB is not None and getattr(_PRE_DB, "_CGS_SCHEMA_REV", None) != "2026-11-28-r2") or (
+    _PRE_AUTH is not None and not hasattr(_PRE_AUTH, "confirm_password_reset")
+):
+    for _mod_name in list(sys.modules):
+        if _mod_name in ("core", "analytics", "geo", "ml", "nlp", "notifications", "ui") or _mod_name.startswith(
+            ("core.", "analytics.", "geo.", "ml.", "nlp.", "notifications.", "ui.")
+        ):
+            sys.modules.pop(_mod_name, None)
+    importlib.invalidate_caches()
 
 from core.analytics_geo import get_public_transparency_by_district
 from core.auth import (
@@ -21,7 +37,7 @@ from core.auth import (
 )
 import core.database as _db
 from core.health import get_health_status
-from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_all_default_locations
+from core.locations import DEFAULT_LGD_CSV, DEFAULT_LOCATION_CSV, get_location_stats, load_all_default_locations, load_lgd_villages_csv
 from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from core.privacy import get_privacy_notice_markdown
 from core.public_status import lookup_public_status
@@ -38,13 +54,15 @@ inject_shared_css()
 
 
 def _ensure_locations_bootstrapped() -> None:
-    """Auto-load official AP India Post pincodes & optional LGD villages once on empty DB."""
+    """Auto-load official AP India Post pincodes & LGD villages once if empty/upgraded."""
     if st.session_state.get("_locations_checked"):
         return
     try:
         stats = get_location_stats()
         if stats["states"] == 0 and DEFAULT_LOCATION_CSV.exists():
             load_all_default_locations()
+        elif stats.get("towns_villages", 0) == 0 and DEFAULT_LGD_CSV.exists():
+            load_lgd_villages_csv(DEFAULT_LGD_CSV)
     except Exception:
         pass
     st.session_state["_locations_checked"] = True

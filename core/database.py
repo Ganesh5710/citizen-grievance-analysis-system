@@ -16,6 +16,7 @@ from core.logging_setup import get_logger
 from core.security import generate_temp_password, hash_password
 
 _logger = get_logger("database")
+_CGS_SCHEMA_REV = "2026-11-28-r2"
 
 # ---------------------------------------------------------------------------
 # Path & DATABASE_URL abstraction
