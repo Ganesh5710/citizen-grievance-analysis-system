@@ -14,12 +14,20 @@ from ui.shared import render_html, render_staff_dashboard
 def render_employee_page(user: dict) -> None:
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     dept_name = html.escape(str(user.get("department") or "Unassigned"))
+    scope_bits = [
+        f"Logged in as <b>{display_name}</b>",
+        f"Department: <b>{dept_name}</b>",
+    ]
+    if user.get("district_name"):
+        scope_bits.append(f"District: <b>{html.escape(str(user['district_name']))}</b>")
+    if user.get("mandal_name"):
+        scope_bits.append(f"Mandal: <b>{html.escape(str(user['mandal_name']))}</b>")
     render_html(
         f"""
         <div class="cgs-top-line"></div>
         <h2 style="margin:0 0 4px;">Employee Dashboard</h2>
         <p class="cgs-muted" style="margin:0 0 24px;">
-            Logged in as <b>{display_name}</b> &nbsp;|&nbsp; Department: <b>{dept_name}</b>
+            {" &nbsp;|&nbsp; ".join(scope_bits)}
         </p>
         """
     )

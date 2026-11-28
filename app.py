@@ -7,10 +7,13 @@ Follows Streamlit's native Light / Dark / System theme.
 from datetime import datetime, timezone
 import html
 
+import pandas as pd
 import streamlit as st
 
+from core.analytics_geo import get_public_transparency_by_district
 from core.auth import change_own_password, is_session_expired, login, register
 import core.database as _db
+from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
 from ui.shared import inject_shared_css, render_html
 
 # ── Page config (must be first Streamlit call) ───────────────────────────────
@@ -21,6 +24,22 @@ st.set_page_config(
 )
 
 inject_shared_css()
+
+
+def _ensure_locations_bootstrapped() -> None:
+    """Auto-load official AP India Post pincodes once on empty locations table."""
+    if st.session_state.get("_locations_checked"):
+        return
+    try:
+        stats = get_location_stats()
+        if stats["states"] == 0 and DEFAULT_LOCATION_CSV.exists():
+            load_locations_from_csv(DEFAULT_LOCATION_CSV)
+    except Exception:
+        pass
+    st.session_state["_locations_checked"] = True
+
+
+_ensure_locations_bootstrapped()
 
 # ── Session state bootstrap (auth/data only — no theme state) ────────────────
 if "user" not in st.session_state:
@@ -58,7 +77,7 @@ def render_auth_page() -> None:
 
         _show_default_password_warning()
 
-        tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
+        tab_login, tab_signup, tab_public = st.tabs(["Login", "Sign Up", "Public Transparency"])
 
         with tab_login:
             with st.form("login_form"):
@@ -114,6 +133,38 @@ def render_auth_page() -> None:
                     except ValueError as exc:
                         st.error(str(exc))
 
+        with tab_public:
+            st.markdown("#### Public District Transparency Dashboard")
+            st.caption(
+                "Aggregated civic grievance statistics by district. "
+                "District groups with fewer than 5 complaints are suppressed to prevent identification; no personal details are shown."
+            )
+            pub = get_public_transparency_by_district()
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Total Reported", pub["total_complaints"])
+            p2.metric("Districts Shown", len(pub["visible_districts"]))
+            p3.metric("Suppressed Groups (< 5)", pub["suppressed_groups_count"])
+
+            if pub["visible_districts"]:
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "District": d["district"],
+                            "Total": d["total"],
+                            "Awaiting Assignment": d["awaiting_assignment"],
+                            "In Progress": d["in_progress"],
+                            "Resolved / Closed": d["resolved"],
+                            "Resolution Rate (%)": d["resolution_rate_pct"],
+                            "Avg Resolution (h)": d["avg_resolution_hours"],
+                        }
+                        for d in pub["visible_districts"]
+                    ]),
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.info("No district currently meets the minimum aggregation threshold of 5 complaints.")
+
 
 def render_forced_password_change(user: dict) -> None:
     """Block dashboard access until a user with a temporary password updates it."""
@@ -162,6 +213,9 @@ def render_topbar(user: dict) -> None:
     safe_role = html.escape(user["role"].replace("_", " ").upper())
 
     col1, col2 = st.columns([6, 1], vertical_alignment="center")
+    extra_scope = ""
+    if user.get("district_name"):
+        extra_scope += f" <span class='cgs-muted'>|</span> <span>{html.escape(str(user['district_name']))}</span>"
     with col1:
         render_html(
             f"""<div class="cgs-top-bar">
@@ -169,7 +223,7 @@ def render_topbar(user: dict) -> None:
                   <span style="font-size:20px;font-weight:700;">Citizen Grievance Portal</span>
                   <span class="cgs-muted" style="margin:0 12px;">|</span>
                   <span>{safe_name}</span>
-                  <span class="cgs-badge {badge_cls}" style="margin-left:10px;">{safe_role}</span>
+                  <span class="cgs-badge {badge_cls}" style="margin-left:10px;">{safe_role}</span>{extra_scope}
                 </div>
             </div>"""
         )

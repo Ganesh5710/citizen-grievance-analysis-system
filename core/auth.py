@@ -36,6 +36,10 @@ SELECT u.id,
        u.role,
        u.department_id,
        d.name AS department_name,
+       u.district_id,
+       dist.name AS district_name,
+       u.mandal_id,
+       m.name AS mandal_name,
        u.is_active,
        u.must_change_password,
        u.failed_login_attempts,
@@ -47,6 +51,8 @@ SELECT u.id,
        u.created_at
 FROM users u
 LEFT JOIN departments d ON d.id = u.department_id
+LEFT JOIN districts dist ON dist.id = u.district_id
+LEFT JOIN mandals m ON m.id = u.mandal_id
 """
 
 
@@ -122,19 +128,24 @@ def _validate_contact_fields(phone: str | None, email: str | None) -> tuple[str,
 
 
 def _row_to_user(row: sqlite3.Row) -> dict:
+    keys = row.keys()
     return {
         "id":                   row["id"],
         "username":             row["username"],
         "full_name":            row["full_name"],
         "role":                 row["role"],
         "department_id":        row["department_id"],
-        "department":           row["department_name"] if "department_name" in row.keys() else None,
+        "department":           row["department_name"] if "department_name" in keys else None,
+        "district_id":          row["district_id"] if "district_id" in keys else None,
+        "district":             row["district_name"] if "district_name" in keys else None,
+        "mandal_id":            row["mandal_id"] if "mandal_id" in keys else None,
+        "mandal":               row["mandal_name"] if "mandal_name" in keys else None,
         "is_active":            bool(row["is_active"]),
         "must_change_password": bool(row["must_change_password"]),
-        "preferred_language":   row["preferred_language"] if "preferred_language" in row.keys() else "en",
-        "phone":                row["phone"] if "phone" in row.keys() else "",
-        "email":                row["email"] if "email" in row.keys() else "",
-        "email_notifications":  bool(row["email_notifications"]) if "email_notifications" in row.keys() else True,
+        "preferred_language":   row["preferred_language"] if "preferred_language" in keys else "en",
+        "phone":                row["phone"] if "phone" in keys else "",
+        "email":                row["email"] if "email" in keys else "",
+        "email_notifications":  bool(row["email_notifications"]) if "email_notifications" in keys else True,
     }
 
 
@@ -397,6 +408,10 @@ def create_user_account(
     password: str,
     role: str,
     department_id: int | None = None,
+    district_id: int | None = None,
+    mandal_id: int | None = None,
+    district_ids: list[int] | None = None,
+    department_ids: list[int] | None = None,
     phone: str = "",
     email: str = "",
 ) -> dict:
@@ -412,19 +427,65 @@ def create_user_account(
     clean_phone, clean_email = _validate_contact_fields(phone, email)
     pw_hash, salt = hash_password(password)
 
+    all_dist_ids = list(dict.fromkeys([int(d) for d in (district_ids or []) if d is not None]))
+    if district_id is not None and int(district_id) not in all_dist_ids:
+        all_dist_ids.insert(0, int(district_id))
+    primary_dist_id = all_dist_ids[0] if all_dist_ids else None
+
     try:
         with closing(get_connection()) as conn, conn:
             resolved_dept_id = _validate_department_for_role(conn, role, department_id)
+            for did in all_dist_ids:
+                if conn.execute("SELECT 1 FROM districts WHERE id = ?", (did,)).fetchone() is None:
+                    raise ValueError(f"District with id {did} does not exist.")
+            if mandal_id is not None:
+                m_row = conn.execute("SELECT id, district_id FROM mandals WHERE id = ?", (int(mandal_id),)).fetchone()
+                if m_row is None:
+                    raise ValueError("Selected mandal does not exist.")
+                if primary_dist_id is None:
+                    primary_dist_id = m_row["district_id"]
+
             cursor = conn.execute(
                 """
                 INSERT INTO users
                     (username, full_name, password_hash, salt, role, department_id,
-                     is_active, must_change_password, phone, email, email_notifications)
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 1)
+                     district_id, mandal_id, is_active, must_change_password, phone, email, email_notifications)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 1)
                 """,
-                (clean_username, clean_full_name, pw_hash, salt, role, resolved_dept_id, clean_phone, clean_email),
+                (
+                    clean_username,
+                    clean_full_name,
+                    pw_hash,
+                    salt,
+                    role,
+                    resolved_dept_id,
+                    primary_dist_id,
+                    int(mandal_id) if mandal_id is not None else None,
+                    clean_phone,
+                    clean_email,
+                ),
             )
             user_id = cursor.lastrowid
+
+            if role == "admin" and all_dist_ids:
+                depts_scope = list(dict.fromkeys([int(x) for x in (department_ids or []) if x is not None]))
+                if not depts_scope and department_id is not None:
+                    depts_scope = [int(department_id)]
+                for did in all_dist_ids:
+                    if depts_scope:
+                        for dep in depts_scope:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) "
+                                "VALUES (?, ?, ?)",
+                                (user_id, did, dep),
+                            )
+                    else:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) "
+                            "VALUES (?, ?, NULL)",
+                            (user_id, did),
+                        )
+
             row = conn.execute(_USER_SELECT + " WHERE u.id = ?", (user_id,)).fetchone()
     except sqlite3.IntegrityError:
         raise ValueError(f"Username '{clean_username}' is already taken.")
@@ -445,8 +506,13 @@ def create_staff_account(
 
 
 def set_user_active(actor: dict | None, target_user_id: int, is_active: bool) -> dict:
-    """Soft-deactivate or reactivate a user account (super_admin only)."""
+    """
+    Soft-deactivate or reactivate a user account (super_admin only).
+    When deactivating an admin, returns their open complaints back to
+    'Awaiting Assignment' while preserving full audit history.
+    """
     require(actor, "manage_users")
+    now_str = _fmt_dt(_utc_now())
 
     with closing(get_connection()) as conn, conn:
         target = conn.execute("SELECT * FROM users WHERE id = ?", (target_user_id,)).fetchone()
@@ -464,6 +530,77 @@ def set_user_active(actor: dict | None, target_user_id: int, is_active: bool) ->
             "UPDATE users SET is_active = ? WHERE id = ?",
             (1 if is_active else 0, target_user_id),
         )
+
+        if not is_active and target["role"] == "admin":
+            j_rows = conn.execute(
+                "SELECT district_id, department_id FROM admin_jurisdictions WHERE user_id = ?",
+                (target_user_id,),
+            ).fetchall()
+            admin_dist_ids = list({jr["district_id"] for jr in j_rows})
+            if target["district_id"] is not None and target["district_id"] not in admin_dist_ids:
+                admin_dist_ids.append(target["district_id"])
+
+            open_rows = []
+            if admin_dist_ids:
+                placeholders = ",".join("?" for _ in admin_dist_ids)
+                open_rows = conn.execute(
+                    f"""
+                    SELECT id, status, assigned_to, assigned_by, district_id
+                    FROM complaints
+                    WHERE is_deleted = 0
+                      AND status NOT IN ('Resolved', 'Closed')
+                      AND (
+                            assigned_by = ?
+                            OR (district_id IN ({placeholders}) AND status IN ('Assigned', 'In Progress', 'Reopened'))
+                      )
+                    """,
+                    (target_user_id, *admin_dist_ids),
+                ).fetchall()
+            else:
+                open_rows = conn.execute(
+                    """
+                    SELECT id, status, assigned_to, assigned_by, district_id
+                    FROM complaints
+                    WHERE is_deleted = 0
+                      AND status NOT IN ('Resolved', 'Closed')
+                      AND assigned_by = ?
+                    """,
+                    (target_user_id,),
+                ).fetchall()
+
+            for cr in open_rows:
+                old_st = cr["status"]
+                conn.execute(
+                    """
+                    UPDATE complaints
+                    SET status = 'Awaiting Assignment',
+                        assigned_to = NULL,
+                        assigned_by = NULL,
+                        assigned_at = NULL,
+                        accepted_at = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now_str, cr["id"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO complaint_updates
+                        (complaint_id, employee_id, actor_label, field_name,
+                         old_status, new_status, old_value, new_value, source, remark, created_at)
+                    VALUES (?, ?, ?, 'status', ?, 'Awaiting Assignment', ?, 'Awaiting Assignment', 'staff_update', ?, ?)
+                    """,
+                    (
+                        cr["id"],
+                        actor["id"],
+                        actor.get("username", ""),
+                        old_st,
+                        old_st,
+                        f"Admin '{target['username']}' deactivated — returned to Awaiting Assignment",
+                        now_str,
+                    ),
+                )
+
         updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (target_user_id,)).fetchone()
 
     return _row_to_user(updated)
@@ -552,12 +689,202 @@ def reset_user_password(actor: dict | None, target_user_id: int) -> str:
     return temp_password
 
 
+def get_user_jurisdictions(user_id: int) -> list[dict]:
+    """Return admin_jurisdictions rows joined with district and optional department names."""
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            """
+            SELECT aj.id, aj.user_id, aj.district_id, dist.name AS district_name,
+                   aj.department_id, dep.name AS department_name
+            FROM admin_jurisdictions aj
+            JOIN districts dist ON dist.id = aj.district_id
+            LEFT JOIN departments dep ON dep.id = aj.department_id
+            WHERE aj.user_id = ?
+            ORDER BY dist.name, dep.name
+            """,
+            (int(user_id),),
+        ).fetchall()
+        if not rows:
+            u = conn.execute(
+                """
+                SELECT u.district_id, dist.name AS district_name
+                FROM users u
+                LEFT JOIN districts dist ON dist.id = u.district_id
+                WHERE u.id = ? AND u.district_id IS NOT NULL
+                """,
+                (int(user_id),),
+            ).fetchone()
+            if u:
+                return [{
+                    "id": None,
+                    "user_id": int(user_id),
+                    "district_id": u["district_id"],
+                    "district_name": u["district_name"],
+                    "department_id": None,
+                    "department_name": None,
+                }]
+    return [dict(r) for r in rows]
+
+
+def create_admin_account(
+    actor: dict | None,
+    username: str,
+    full_name: str,
+    password: str,
+    district_ids: list[int],
+    department_ids: list[int] | None = None,
+    phone: str = "",
+    email: str = "",
+) -> dict:
+    """Create a district-scoped Admin account (super_admin only)."""
+    require(actor, "manage_admins")
+    if not district_ids:
+        raise ValueError("Select at least one district for the Admin account.")
+    return create_user_account(
+        actor,
+        username,
+        full_name,
+        password,
+        role="admin",
+        district_ids=district_ids,
+        department_ids=department_ids,
+        phone=phone,
+        email=email,
+    )
+
+
+def update_admin_jurisdiction(
+    actor: dict | None,
+    admin_user_id: int,
+    district_ids: list[int],
+    department_ids: list[int] | None = None,
+) -> dict:
+    """Replace an admin's district & optional department jurisdiction (super_admin only)."""
+    require(actor, "manage_admins")
+    clean_dists = list(dict.fromkeys([int(d) for d in (district_ids or []) if d is not None]))
+    if not clean_dists:
+        raise ValueError("An Admin must be assigned at least one district.")
+    clean_depts = list(dict.fromkeys([int(x) for x in (department_ids or []) if x is not None]))
+
+    with closing(get_connection()) as conn, conn:
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (int(admin_user_id),)).fetchone()
+        if target is None or target["role"] != "admin":
+            raise ValueError("Target account must be an Admin user.")
+        for did in clean_dists:
+            if conn.execute("SELECT 1 FROM districts WHERE id = ?", (did,)).fetchone() is None:
+                raise ValueError(f"District {did} does not exist.")
+
+        conn.execute("UPDATE users SET district_id = ? WHERE id = ?", (clean_dists[0], int(admin_user_id)))
+        conn.execute("DELETE FROM admin_jurisdictions WHERE user_id = ?", (int(admin_user_id),))
+        for did in clean_dists:
+            if clean_depts:
+                for dep in clean_depts:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) "
+                        "VALUES (?, ?, ?)",
+                        (int(admin_user_id), did, dep),
+                    )
+            else:
+                conn.execute(
+                    "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) "
+                    "VALUES (?, ?, NULL)",
+                    (int(admin_user_id), did),
+                )
+        updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (int(admin_user_id),)).fetchone()
+    return _row_to_user(updated)
+
+
+def set_user_jurisdiction(
+    actor: dict | None,
+    target_user_id: int,
+    district_id: int | None,
+    mandal_id: int | None = None,
+) -> dict:
+    """Set district/mandal jurisdiction for an employee or admin (super_admin only)."""
+    require(actor, "manage_users")
+    with closing(get_connection()) as conn, conn:
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (int(target_user_id),)).fetchone()
+        if target is None:
+            raise ValueError("User not found.")
+        if district_id is not None:
+            if conn.execute("SELECT 1 FROM districts WHERE id = ?", (int(district_id),)).fetchone() is None:
+                raise ValueError("Selected district does not exist.")
+        if mandal_id is not None:
+            if conn.execute("SELECT 1 FROM mandals WHERE id = ?", (int(mandal_id),)).fetchone() is None:
+                raise ValueError("Selected mandal does not exist.")
+        conn.execute(
+            "UPDATE users SET district_id = ?, mandal_id = ? WHERE id = ?",
+            (int(district_id) if district_id is not None else None, int(mandal_id) if mandal_id is not None else None, int(target_user_id)),
+        )
+        if target["role"] == "admin" and district_id is not None:
+            conn.execute("DELETE FROM admin_jurisdictions WHERE user_id = ?", (int(target_user_id),))
+            conn.execute(
+                "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) VALUES (?, ?, NULL)",
+                (int(target_user_id), int(district_id)),
+            )
+        updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (int(target_user_id),)).fetchone()
+    return _row_to_user(updated)
+
+
+def reassign_district_to_admin(
+    actor: dict | None,
+    district_id: int,
+    target_admin_id: int,
+    from_admin_id: int | None = None,
+) -> dict:
+    """Assign district jurisdiction to target_admin_id (and optionally remove from from_admin_id)."""
+    require(actor, "manage_admins")
+    with closing(get_connection()) as conn, conn:
+        if conn.execute("SELECT 1 FROM districts WHERE id = ?", (int(district_id),)).fetchone() is None:
+            raise ValueError("Selected district does not exist.")
+        adm = conn.execute("SELECT id, role, is_active FROM users WHERE id = ?", (int(target_admin_id),)).fetchone()
+        if adm is None or adm["role"] != "admin" or not adm["is_active"]:
+            raise ValueError("Target user must be an active Admin.")
+
+        conn.execute(
+            "INSERT OR IGNORE INTO admin_jurisdictions (user_id, district_id, department_id) VALUES (?, ?, NULL)",
+            (int(target_admin_id), int(district_id)),
+        )
+        conn.execute(
+            "UPDATE users SET district_id = COALESCE(district_id, ?) WHERE id = ?",
+            (int(district_id), int(target_admin_id)),
+        )
+        if from_admin_id is not None and int(from_admin_id) != int(target_admin_id):
+            conn.execute(
+                "DELETE FROM admin_jurisdictions WHERE user_id = ? AND district_id = ?",
+                (int(from_admin_id), int(district_id)),
+            )
+            remaining = conn.execute(
+                "SELECT district_id FROM admin_jurisdictions WHERE user_id = ? ORDER BY id LIMIT 1",
+                (int(from_admin_id),),
+            ).fetchone()
+            conn.execute(
+                "UPDATE users SET district_id = ? WHERE id = ?",
+                (remaining["district_id"] if remaining else None, int(from_admin_id)),
+            )
+        updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (int(target_admin_id),)).fetchone()
+    return _row_to_user(updated)
+
+
 def get_all_users(actor: dict | None) -> list[dict]:
     """Return list of all users (super_admin only, no password fields)."""
     require(actor, "manage_users")
 
     with closing(get_connection()) as conn:
         rows = conn.execute(_USER_SELECT + " ORDER BY u.id").fetchall()
+        j_rows = conn.execute(
+            """
+            SELECT aj.user_id, dist.name AS district_name, dep.name AS department_name
+            FROM admin_jurisdictions aj
+            JOIN districts dist ON dist.id = aj.district_id
+            LEFT JOIN departments dep ON dep.id = aj.department_id
+            """
+        ).fetchall()
+
+    j_map: dict[int, list[str]] = {}
+    for jr in j_rows:
+        lbl = jr["district_name"] + (f" ({jr['department_name']})" if jr["department_name"] else "")
+        j_map.setdefault(jr["user_id"], []).append(lbl)
 
     return [
         {
@@ -567,6 +894,11 @@ def get_all_users(actor: dict | None) -> list[dict]:
             "role":                 row["role"],
             "department_id":        row["department_id"],
             "department":           row["department_name"],
+            "district_id":          row["district_id"],
+            "district":             row["district_name"],
+            "mandal_id":            row["mandal_id"],
+            "mandal":               row["mandal_name"],
+            "jurisdictions":        ", ".join(j_map.get(row["id"], [])),
             "is_active":            bool(row["is_active"]),
             "must_change_password": bool(row["must_change_password"]),
             "preferred_language":   row["preferred_language"],

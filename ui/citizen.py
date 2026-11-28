@@ -19,6 +19,14 @@ from core.complaints import (
 )
 from core.departments import get_active_departments
 from core.images import MAX_IMAGES_PER_COMPLAINT, add_images
+from core.locations import (
+    get_areas,
+    get_default_state,
+    get_districts,
+    get_mandals,
+    get_states,
+    lookup_pincode,
+)
 from core.sla import AUTO_CLOSE_DAYS, parse_utc
 from ml.classifier import predict_complaint
 from ui.shared import (
@@ -68,7 +76,7 @@ def _render_department_selection(active_depts: list[dict]) -> None:
 
 
 def _render_complaint_form(user: dict, dept: dict) -> None:
-    """Step 2: Complaint form for the chosen department, including optional photos."""
+    """Step 2: Complaint form with Pincode lookup or Cascading AP location + map pin + photos."""
     col_hdr, col_btn = st.columns([4, 1], vertical_alignment="center")
     with col_hdr:
         st.markdown(f"### Step 2: File Complaint - {dept['name']}")
@@ -80,6 +88,165 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
 
     form_gen = st.session_state.get("citizen_form_gen", 0)
 
+    # Interactive location resolution (Pincode Lookup vs Cascading Dropdowns)
+    st.markdown("#### Grievance Location")
+    states = get_states(active_only=True)
+    default_state = get_default_state()
+
+    sel_state_id: int | None = default_state["id"] if default_state else None
+    sel_district_id: int | None = None
+    sel_mandal_id: int | None = None
+    sel_area_id: int | None = None
+    sel_pincode: str = ""
+    centroid_lat: float | None = None
+    centroid_lon: float | None = None
+
+    if states:
+        loc_mode = st.radio(
+            "Choose location entry method",
+            options=["Lookup by 6-digit Pincode", "Cascading Select (State / District / Area)"],
+            horizontal=True,
+            key=f"citizen_loc_mode_{form_gen}",
+        )
+        if loc_mode.startswith("Lookup"):
+            pin_val = st.text_input(
+                "Enter 6-digit Pincode (required)",
+                max_chars=6,
+                placeholder="e.g. 521126",
+                key=f"citizen_pincode_in_{form_gen}",
+            ).strip()
+            if pin_val:
+                pin_info = lookup_pincode(pin_val)
+                if pin_info is None:
+                    st.error("Pincode must be 6 digits and present in the India Post directory.")
+                else:
+                    sel_pincode = pin_info["pincode"]
+                    sel_state_id = pin_info["state_id"]
+                    sel_district_id = pin_info["district_id"]
+                    areas_for_pin = pin_info["areas"]
+                    c_l1, c_l2, c_l3 = st.columns(3)
+                    c_l1.text_input(
+                        "State", value=pin_info["state_name"], disabled=True, key=f"c_ro_st_{form_gen}"
+                    )
+                    c_l2.text_input(
+                        "District", value=pin_info["district_name"], disabled=True, key=f"c_ro_dist_{form_gen}"
+                    )
+                    with c_l3:
+                        area_opts = [a["area_id"] for a in areas_for_pin]
+                        area_lbls = {a["area_id"]: a["area_name"] for a in areas_for_pin}
+                        sel_area_id = st.selectbox(
+                            "Confirm Area / Post Office",
+                            options=area_opts,
+                            format_func=lambda aid: area_lbls.get(aid, str(aid)),
+                            key=f"citizen_pin_area_{form_gen}_{sel_pincode}",
+                        )
+                    chosen_a = next((a for a in areas_for_pin if a["area_id"] == sel_area_id), None)
+                    if chosen_a:
+                        sel_mandal_id = chosen_a.get("mandal_id")
+                        centroid_lat = chosen_a.get("latitude")
+                        centroid_lon = chosen_a.get("longitude")
+        else:
+            state_ids = [s["id"] for s in states]
+            state_lbls = {s["id"]: s["name"] for s in states}
+            def_st_idx = state_ids.index(sel_state_id) if sel_state_id in state_ids else 0
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                sel_state_id = st.selectbox(
+                    "State",
+                    options=state_ids,
+                    index=def_st_idx,
+                    format_func=lambda sid: state_lbls.get(sid, str(sid)),
+                    key=f"citizen_casc_state_{form_gen}",
+                )
+            districts = get_districts(sel_state_id, active_only=True)
+            with cc2:
+                if districts:
+                    dist_ids = [d["id"] for d in districts]
+                    dist_lbls = {d["id"]: d["name"] for d in districts}
+                    sel_district_id = st.selectbox(
+                        "District",
+                        options=dist_ids,
+                        format_func=lambda did: dist_lbls.get(did, str(did)),
+                        key=f"citizen_casc_dist_{form_gen}_{sel_state_id}",
+                    )
+                else:
+                    st.warning("No districts loaded for this state.")
+
+            if sel_district_id is not None:
+                mandals = get_mandals(sel_district_id, active_only=True)
+                cc3, cc4 = st.columns(2)
+                if mandals:
+                    with cc3:
+                        m_ids = [m["id"] for m in mandals]
+                        m_lbls = {m["id"]: m["name"] for m in mandals}
+                        sel_mandal_id = st.selectbox(
+                            "Mandal",
+                            options=m_ids,
+                            format_func=lambda mid: m_lbls.get(mid, str(mid)),
+                            key=f"citizen_casc_mandal_{form_gen}_{sel_district_id}",
+                        )
+                    areas = get_areas(sel_district_id, mandal_id=sel_mandal_id, active_only=True)
+                else:
+                    areas = get_areas(sel_district_id, active_only=True)
+                    with cc3:
+                        st.caption("Mandal level not present in India Post directory (district -> area mapping used).")
+
+                with cc4:
+                    if areas:
+                        a_ids = [a["id"] for a in areas]
+                        a_lbls = {a["id"]: f"{a['name']} ({a.get('pincode') or ''})" for a in areas}
+                        sel_area_id = st.selectbox(
+                            "Area / Village / Post Office",
+                            options=a_ids,
+                            format_func=lambda aid: a_lbls.get(aid, str(aid)),
+                            key=f"citizen_casc_area_{form_gen}_{sel_district_id}_{sel_mandal_id}",
+                        )
+                        chosen_area = next((a for a in areas if a["id"] == sel_area_id), None)
+                        if chosen_area:
+                            sel_pincode = chosen_area.get("pincode") or ""
+                            centroid_lat = chosen_area.get("latitude")
+                            centroid_lon = chosen_area.get("longitude")
+                            st.caption(f"Auto-filled Pincode: **{sel_pincode or 'N/A'}**")
+    else:
+        st.caption("Location directory not yet loaded; enter manual landmark below.")
+
+    # Optional interactive map pin picker
+    pin_lat_key = f"citizen_map_lat_{form_gen}"
+    pin_lon_key = f"citizen_map_lon_{form_gen}"
+    with st.expander("Drop Map Pin (Optional)"):
+        base_lat = centroid_lat if centroid_lat is not None else 16.5062
+        base_lon = centroid_lon if centroid_lon is not None else 80.6480
+        try:
+            import folium
+            from streamlit_folium import st_folium
+
+            fmap = folium.Map(location=[base_lat, base_lon], zoom_start=12)
+            cur_lat = st.session_state.get(pin_lat_key)
+            cur_lon = st.session_state.get(pin_lon_key)
+            if cur_lat is not None and cur_lon is not None:
+                folium.Marker([cur_lat, cur_lon], tooltip="Pinned Location").add_to(fmap)
+            map_out = st_folium(fmap, height=280, width=None, key=f"citizen_pin_map_{form_gen}_{base_lat}_{base_lon}")
+            if isinstance(map_out, dict) and map_out.get("last_clicked"):
+                st.session_state[pin_lat_key] = round(float(map_out["last_clicked"]["lat"]), 6)
+                st.session_state[pin_lon_key] = round(float(map_out["last_clicked"]["lng"]), 6)
+        except Exception:
+            st.caption("Map widget unavailable offline; manual coordinates optional.")
+        mc1, mc2 = st.columns(2)
+        manual_lat = mc1.number_input(
+            "Latitude (optional)",
+            value=float(st.session_state.get(pin_lat_key) or (centroid_lat or 0.0)),
+            format="%.6f",
+            key=f"citizen_lat_in_{form_gen}",
+        )
+        manual_lon = mc2.number_input(
+            "Longitude (optional)",
+            value=float(st.session_state.get(pin_lon_key) or (centroid_lon or 0.0)),
+            format="%.6f",
+            key=f"citizen_lon_in_{form_gen}",
+        )
+        chosen_lat = manual_lat if manual_lat != 0.0 else centroid_lat
+        chosen_lon = manual_lon if manual_lon != 0.0 else centroid_lon
+
     # clear_on_submit=False preserves typed text when validation fails
     with st.form(key=f"citizen_submit_form_{form_gen}", clear_on_submit=False):
         complaint_text = st.text_area(
@@ -89,8 +256,8 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
             key=f"citizen_complaint_desc_{form_gen}",
         )
         location = st.text_input(
-            "Location / Landmark (required)",
-            placeholder="e.g. Main Street near City Hall",
+            "Landmark / Street Detail (optional if area selected)",
+            placeholder="e.g. Near Bus Stop / Door No. 4-12",
             key=f"citizen_complaint_loc_{form_gen}",
         )
         uploaded_files = st.file_uploader(
@@ -110,7 +277,7 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
         if len(complaint_text.strip()) < 10:
             st.warning("Enter at least 10 characters in the description to preview the AI suggestion.")
         else:
-            pred = predict_complaint(complaint_text.strip())
+            pred = predict_complaint(complaint_text.strip(), department_hint=dept["name"])
             sugg_dept = pred.get("department", dept["name"])
             conf_pct = round(float(pred.get("confidence", 0.0)) * 100)
             sugg_prio = pred.get("priority", "Medium")
@@ -142,7 +309,10 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
         if len(text_stripped) < 10:
             st.error("Please describe your complaint in at least 10 characters.")
             return
-        if len(loc_stripped) < 2:
+        if states and not sel_pincode and sel_district_id is None:
+            st.error("Please enter a valid 6-digit pincode or select District and Area.")
+            return
+        if not states and len(loc_stripped) < 2:
             st.error("Location / Landmark is required.")
             return
         if uploaded_files and len(uploaded_files) > MAX_IMAGES_PER_COMPLAINT:
@@ -156,6 +326,13 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
                 text_stripped,
                 loc_stripped,
                 files=uploaded_files or None,
+                latitude=chosen_lat,
+                longitude=chosen_lon,
+                pincode=sel_pincode or None,
+                state_id=sel_state_id,
+                district_id=sel_district_id,
+                mandal_id=sel_mandal_id,
+                area_id=sel_area_id,
             )
             saved = next(
                 (c for c in get_complaints(user) if c["incident_id"] == incident_id),

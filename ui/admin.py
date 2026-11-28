@@ -10,6 +10,7 @@ import html
 
 import streamlit as st
 
+from core.auth import get_user_jurisdictions
 from ui.shared import (
     render_escalations_tab,
     render_html,
@@ -21,11 +22,16 @@ from ui.shared import (
 
 def render_admin_page(user: dict) -> None:
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
+    jurs = get_user_jurisdictions(user["id"]) if user.get("id") else []
+    dist_names = sorted({j["district_name"] for j in jurs if j.get("district_name")})
+    jur_str = html.escape(", ".join(dist_names)) if dist_names else "Legacy Unscoped / All"
     render_html(
         f"""
         <div class="cgs-top-line"></div>
         <h2 style="margin:0 0 4px;">Admin Dashboard</h2>
-        <p class="cgs-muted" style="margin:0 0 24px;">Logged in as <b>{display_name}</b></p>
+        <p class="cgs-muted" style="margin:0 0 24px;">
+            Logged in as <b>{display_name}</b> &nbsp;|&nbsp; Jurisdiction: <b>{jur_str}</b>
+        </p>
         """
     )
 

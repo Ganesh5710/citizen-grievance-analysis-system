@@ -146,9 +146,10 @@ def _validate_and_reencode_image(raw_bytes: bytes, orig_name: str) -> tuple[byte
 
 
 def _assert_can_view_complaint(conn, actor: dict | None, complaint_id: int) -> dict:
-    """Enforce role + scope (user=own, employee=own department, admin/super_admin=all)."""
+    """Enforce role + jurisdiction/department/assignment scope for attachments."""
     row = conn.execute(
-        "SELECT id, user_id, department_id, status, is_deleted FROM complaints WHERE id = ?",
+        "SELECT id, user_id, department_id, district_id, mandal_id, assigned_to, status, is_deleted "
+        "FROM complaints WHERE id = ?",
         (complaint_id,),
     ).fetchone()
 
@@ -164,6 +165,23 @@ def _assert_can_view_complaint(conn, actor: dict | None, complaint_id: int) -> d
     if actor.get("role") == "employee":
         if actor.get("department_id") is None or row["department_id"] != actor.get("department_id"):
             raise PermissionError("Employees can only view attachments in their own department.")
+        if row["assigned_to"] is not None and row["assigned_to"] != actor.get("id"):
+            raise PermissionError("Employees cannot view attachments of tasks assigned to others.")
+        if row["district_id"] is not None and row["assigned_to"] != actor.get("id"):
+            raise PermissionError("Employees can only view attachments of tasks assigned to them.")
+    elif actor.get("role") == "admin" and row["district_id"] is not None:
+        j_rows = conn.execute(
+            "SELECT district_id, department_id FROM admin_jurisdictions WHERE user_id = ?",
+            (actor["id"],),
+        ).fetchall()
+        allowed = [(jr["district_id"], jr["department_id"]) for jr in j_rows]
+        if not allowed and actor.get("district_id") is not None:
+            allowed = [(actor["district_id"], None)]
+        if not any(
+            d_id == row["district_id"] and (dep_id is None or dep_id == row["department_id"])
+            for d_id, dep_id in allowed
+        ):
+            raise PermissionError("Admins can only access complaints within their assigned jurisdiction.")
     return dict(row)
 
 
@@ -211,6 +229,7 @@ def save_prepared_images_in_conn(
     complaint_status: str,
     prepared: list[tuple[bytes, str, str, str]],
     now: str | None = None,
+    photo_stage: str = "initial",
 ) -> list[dict]:
     """Write already-validated image bytes to disk and insert DB + audit records."""
     if not prepared:
@@ -220,6 +239,8 @@ def save_prepared_images_in_conn(
     target_dir.mkdir(parents=True, exist_ok=True)
     ts = now or _utc_now()
     created: list[dict] = []
+    stage = "after" if photo_stage == "after" else "initial"
+    src_tag = "staff_update" if stage == "after" else "citizen_upload"
 
     for clean_bytes, stored_name, safe_orig, mime_type in prepared:
         dest_path = target_dir / stored_name
@@ -230,10 +251,10 @@ def save_prepared_images_in_conn(
             """
             INSERT INTO complaint_images
                 (complaint_id, uploaded_by, stored_filename, original_filename,
-                 mime_type, file_size, created_at, is_removed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                 mime_type, file_size, photo_stage, created_at, is_removed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
             """,
-            (complaint_id, actor["id"], stored_name, safe_orig, mime_type, size_bytes, ts),
+            (complaint_id, actor["id"], stored_name, safe_orig, mime_type, size_bytes, stage, ts),
         )
         created.append({
             "id":                cursor.lastrowid,
@@ -243,6 +264,7 @@ def save_prepared_images_in_conn(
             "original_filename": safe_orig,
             "mime_type":         mime_type,
             "file_size":         size_bytes,
+            "photo_stage":       stage,
             "created_at":        ts,
         })
 
@@ -251,7 +273,7 @@ def save_prepared_images_in_conn(
             INSERT INTO complaint_updates
                 (complaint_id, employee_id, actor_label, field_name,
                  old_status, new_status, old_value, new_value, source, remark, created_at)
-            VALUES (?, ?, ?, 'image_added', ?, ?, '', ?, 'citizen_upload', ?, ?)
+            VALUES (?, ?, ?, 'image_added', ?, ?, '', ?, ?, ?, ?)
             """,
             (
                 complaint_id,
@@ -260,7 +282,8 @@ def save_prepared_images_in_conn(
                 complaint_status,
                 complaint_status,
                 safe_orig,
-                f"Photo attached: {safe_orig}",
+                src_tag,
+                f"Photo attached ({stage}): {safe_orig}",
                 ts,
             ),
         )
@@ -306,17 +329,50 @@ def add_images(actor: dict | None, complaint_id: int, files: list | tuple) -> li
     return created
 
 
+def add_after_images(actor: dict | None, complaint_id: int, files: list | tuple) -> list[dict]:
+    """Allow an assigned employee (or admin/super_admin) to attach 'after' verification photos."""
+    require(actor, "update_task_status")
+    file_list = list(files) if files else []
+    if not file_list:
+        raise ValueError("Please select at least one photo.")
+    if len(file_list) > MAX_IMAGES_PER_COMPLAINT:
+        raise ValueError(f"Maximum {MAX_IMAGES_PER_COMPLAINT} after-photos allowed per upload.")
+
+    with closing(_db.get_connection()) as conn, conn:
+        comp = conn.execute(
+            "SELECT id, department_id, district_id, assigned_to, status, is_deleted FROM complaints WHERE id = ?",
+            (complaint_id,),
+        ).fetchone()
+        if comp is None or comp["is_deleted"]:
+            raise ValueError(f"Complaint with id {complaint_id} not found.")
+        if actor.get("role") == "employee":
+            if comp["assigned_to"] != actor.get("id"):
+                raise PermissionError("Employees can only add after-photos to tasks assigned to them.")
+        existing_after = conn.execute(
+            "SELECT COUNT(*) FROM complaint_images WHERE complaint_id = ? AND is_removed = 0 AND photo_stage = 'after'",
+            (complaint_id,),
+        ).fetchone()[0]
+        if existing_after + len(file_list) > MAX_IMAGES_PER_COMPLAINT:
+            raise ValueError(
+                f"Maximum {MAX_IMAGES_PER_COMPLAINT} after-photos allowed per complaint (currently {existing_after})."
+            )
+        prepared = prepare_images(file_list)
+        return save_prepared_images_in_conn(
+            conn, actor, complaint_id, comp["status"], prepared, photo_stage="after"
+        )
+
+
 def get_images(actor: dict | None, complaint_id: int) -> list[dict]:
     """
     Retrieve active images (with raw bytes) for complaint_id.
-    Enforces: user=own only, employee=own department only, admin/super_admin=all.
+    Enforces: user=own only, employee=own department/assigned only, admin=own jurisdiction, super_admin=all.
     """
     with closing(_db.get_connection()) as conn:
         _assert_can_view_complaint(conn, actor, complaint_id)
         rows = conn.execute(
             """
             SELECT id, complaint_id, uploaded_by, stored_filename, original_filename,
-                   mime_type, file_size, created_at
+                   mime_type, file_size, COALESCE(photo_stage, 'initial') AS photo_stage, created_at
             FROM complaint_images
             WHERE complaint_id = ? AND is_removed = 0
             ORDER BY id ASC
@@ -337,6 +393,7 @@ def get_images(actor: dict | None, complaint_id: int) -> list[dict]:
             "original_filename": row["original_filename"],
             "mime_type":         row["mime_type"],
             "file_size":         row["file_size"],
+            "photo_stage":       row["photo_stage"],
             "created_at":        row["created_at"],
             "data":              data,
         })

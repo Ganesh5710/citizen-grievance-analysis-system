@@ -16,11 +16,15 @@ import streamlit as st
 
 from core.auth import (
     change_user_role,
+    create_admin_account,
     create_user_account,
     get_all_users,
+    reassign_district_to_admin,
     reset_user_password,
     set_user_active,
     set_user_department,
+    set_user_jurisdiction,
+    update_admin_jurisdiction,
 )
 from core.departments import (
     create_department,
@@ -29,7 +33,22 @@ from core.departments import (
     rename_department,
     set_department_active,
 )
+from core.locations import (
+    get_default_state,
+    get_districts,
+    get_location_stats,
+    get_mandals,
+    reload_locations_admin,
+)
 from core.ml_service import activate_ml_model, list_ml_models, retrain_ml_models
+from core.oversight import (
+    get_admin_oversight_metrics,
+    get_audit_logs_filtered,
+    get_super_admin_notifications,
+    mark_all_notifications_read,
+    mark_notification_read,
+    run_unassigned_escalation_check,
+)
 from core.priority_rules import (
     get_duration_extraction_logs,
     get_priority_feedback_logs,
@@ -67,6 +86,10 @@ def _render_user_management(user: dict) -> None:
     dept_ids = [d["id"] for d in active_depts]
     dept_labels = {d["id"]: d["name"] for d in active_depts}
 
+    all_districts = get_districts(active_only=True)
+    dist_ids = [d["id"] for d in all_districts]
+    dist_labels = {d["id"]: d["name"] for d in all_districts}
+
     user_form_gen = st.session_state.get("sa_user_form_gen", 0)
     with st.form(key=f"sa_create_user_form_{user_form_gen}", clear_on_submit=False):
         col1, col2 = st.columns(2)
@@ -86,6 +109,12 @@ def _render_user_management(user: dict) -> None:
                 options=ALL_ROLES,
                 key=f"sa_new_role_{user_form_gen}",
             )
+            new_district_id = st.selectbox(
+                "District Jurisdiction (for employee / single-district)",
+                options=[None, *dist_ids],
+                format_func=lambda did: "None (Unscoped)" if did is None else dist_labels.get(did, str(did)),
+                key=f"sa_new_user_district_{user_form_gen}",
+            )
         with col2:
             new_full_name = st.text_input(
                 "Full Name",
@@ -103,6 +132,19 @@ def _render_user_management(user: dict) -> None:
                 format_func=lambda did: "None (non-employee)" if did is None else dept_labels.get(did, str(did)),
                 key=f"sa_new_user_dept_{user_form_gen}",
             )
+            new_admin_districts = st.multiselect(
+                "Admin Districts (when role is admin; defaults to selected District above)",
+                options=dist_ids,
+                format_func=lambda did: dist_labels.get(did, str(did)),
+                key=f"sa_new_admin_districts_{user_form_gen}",
+            )
+
+        new_admin_depts = st.multiselect(
+            "Admin Department Scope (optional; leave empty for all departments in assigned districts)",
+            options=dept_ids,
+            format_func=lambda did: dept_labels.get(did, str(did)),
+            key=f"sa_new_admin_depts_{user_form_gen}",
+        )
 
         create_btn = st.form_submit_button("Create Account", type="primary")
 
@@ -120,14 +162,37 @@ def _render_user_management(user: dict) -> None:
             st.error("Passwords do not match.")
         else:
             try:
-                create_user_account(
-                    user,
-                    username_stripped,
-                    full_name_stripped,
-                    new_password,
-                    new_role,
-                    department_id=new_dept_id if new_role == "employee" else None,
-                )
+                if new_role == "admin":
+                    admin_dids = list(new_admin_districts)
+                    if not admin_dids and new_district_id is not None:
+                        admin_dids = [new_district_id]
+                    if admin_dids:
+                        create_admin_account(
+                            user,
+                            username_stripped,
+                            full_name_stripped,
+                            new_password,
+                            district_ids=admin_dids,
+                            department_ids=list(new_admin_depts) if new_admin_depts else None,
+                        )
+                    else:
+                        create_user_account(
+                            user,
+                            username_stripped,
+                            full_name_stripped,
+                            new_password,
+                            new_role,
+                        )
+                else:
+                    create_user_account(
+                        user,
+                        username_stripped,
+                        full_name_stripped,
+                        new_password,
+                        new_role,
+                        department_id=new_dept_id if new_role == "employee" else None,
+                        district_id=new_district_id if new_role == "employee" else None,
+                    )
                 st.session_state["sa_user_flash"] = (
                     f"Account created for {full_name_stripped} ({username_stripped}) "
                     f"with role {new_role}."
@@ -157,6 +222,15 @@ def _render_user_management(user: dict) -> None:
         st.info("No users found in the system.")
         return
 
+    def _fmt_user_jur(u: dict) -> str:
+        if u["role"] == "admin":
+            jurs = u.get("admin_jurisdictions") or []
+            dnames = sorted({j["district_name"] for j in jurs if j.get("district_name")})
+            return ", ".join(dnames) if dnames else "Legacy Unscoped"
+        if u.get("district_name"):
+            return f"{u['district_name']}" + (f" / {u['mandal_name']}" if u.get("mandal_name") else "")
+        return "-"
+
     rows = [
         {
             "ID":             u["id"],
@@ -164,6 +238,7 @@ def _render_user_management(user: dict) -> None:
             "Full Name":      u["full_name"],
             "Role":           u["role"],
             "Department":     u["department"] or "-",
+            "Jurisdiction":   _fmt_user_jur(u),
             "Status":         "Active" if u["is_active"] else "Inactive",
             "Reset Required": "Yes" if u["must_change_password"] else "No",
             "Created At":     u["created_at"],
@@ -200,7 +275,7 @@ def _render_user_management(user: dict) -> None:
         key=select_key,
     )
     target = next(u for u in all_users if u["id"] == target_id)
-    target_ver = f"{target_id}_{target['role']}_{target['department_id']}_{target['is_active']}"
+    target_ver = f"{target_id}_{target['role']}_{target['department_id']}_{target.get('district_id')}_{target['is_active']}"
 
     col_role, col_dept, col_status, col_reset = st.columns([2, 2, 1, 1], vertical_alignment="bottom")
 
@@ -252,8 +327,13 @@ def _render_user_management(user: dict) -> None:
             try:
                 set_user_active(user, target_id, not target["is_active"])
                 new_state = "reactivated" if not target["is_active"] else "deactivated"
+                extra = (
+                    " Open district tasks returned to Awaiting Assignment."
+                    if (not new_state.startswith("re")) and target["role"] == "admin"
+                    else ""
+                )
                 st.session_state["sa_user_flash"] = (
-                    f"User {target['username']} {new_state}."
+                    f"User {target['username']} {new_state}.{extra}"
                 )
                 st.rerun()
             except (PermissionError, ValueError) as exc:
@@ -267,6 +347,89 @@ def _render_user_management(user: dict) -> None:
                     "username": target["username"],
                     "password": temp_pw,
                 }
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    if target["role"] == "admin" and dist_ids:
+        st.markdown("#### Admin Jurisdiction Scope")
+        if target["is_active"]:
+            st.caption("Deactivating an admin automatically releases their open complaints back to Awaiting Assignment.")
+        cur_jurs = target.get("admin_jurisdictions") or []
+        cur_dist_ids = sorted({j["district_id"] for j in cur_jurs if j.get("district_id") in dist_ids})
+        cur_admin_dept_ids = sorted({j["department_id"] for j in cur_jurs if j.get("department_id") in dept_ids})
+
+        jcol1, jcol2 = st.columns(2)
+        with jcol1:
+            upd_admin_dists = st.multiselect(
+                "Assigned Districts",
+                options=dist_ids,
+                default=cur_dist_ids,
+                format_func=lambda did: dist_labels.get(did, str(did)),
+                key=f"sa_edit_admin_dists_{target_ver}",
+            )
+        with jcol2:
+            upd_admin_depts = st.multiselect(
+                "Department Restriction (optional)",
+                options=dept_ids,
+                default=cur_admin_dept_ids,
+                format_func=lambda did: dept_labels.get(did, str(did)),
+                key=f"sa_edit_admin_depts_{target_ver}",
+            )
+        if st.button("Update Admin Jurisdiction", key=f"sa_upd_admin_jur_btn_{target_ver}"):
+            try:
+                update_admin_jurisdiction(
+                    user,
+                    target_id,
+                    district_ids=list(upd_admin_dists),
+                    department_ids=list(upd_admin_depts) if upd_admin_depts else None,
+                )
+                st.session_state["sa_user_flash"] = f"Updated jurisdiction for admin {target['username']}."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    elif target["role"] == "employee" and dist_ids:
+        st.markdown("#### Employee Jurisdiction Scope")
+        emp_dist_opts: list[int | None] = [None, *dist_ids]
+        cur_emp_did = target.get("district_id")
+        emp_dist_idx = emp_dist_opts.index(cur_emp_did) if cur_emp_did in emp_dist_opts else 0
+
+        ecol1, ecol2 = st.columns(2)
+        with ecol1:
+            upd_emp_did = st.selectbox(
+                "Assigned District",
+                options=emp_dist_opts,
+                index=emp_dist_idx,
+                format_func=lambda did: "Unscoped" if did is None else dist_labels.get(did, str(did)),
+                key=f"sa_edit_emp_dist_{target_ver}",
+            )
+        upd_emp_mid = None
+        emp_mandals = get_mandals(upd_emp_did) if upd_emp_did is not None else []
+        with ecol2:
+            if emp_mandals:
+                m_opts: list[int | None] = [None, *[m["id"] for m in emp_mandals]]
+                m_lbls = {None: "All Mandals in District", **{m["id"]: m["name"] for m in emp_mandals}}
+                cur_mid = target.get("mandal_id")
+                m_idx = m_opts.index(cur_mid) if cur_mid in m_opts else 0
+                upd_emp_mid = st.selectbox(
+                    "Assigned Mandal (optional)",
+                    options=m_opts,
+                    index=m_idx,
+                    format_func=lambda mid: m_lbls.get(mid, str(mid)),
+                    key=f"sa_edit_emp_mandal_{target_ver}",
+                )
+            else:
+                st.text_input(
+                    "Assigned Mandal (optional)",
+                    value="N/A (no mandal data loaded)",
+                    disabled=True,
+                    key=f"sa_edit_emp_mandal_na_{target_ver}",
+                )
+        if st.button("Update Employee Jurisdiction", key=f"sa_upd_emp_jur_btn_{target_ver}"):
+            try:
+                set_user_jurisdiction(user, target_id, upd_emp_did, upd_emp_mid)
+                st.session_state["sa_user_flash"] = f"Updated jurisdiction for employee {target['username']}."
                 st.rerun()
             except (PermissionError, ValueError) as exc:
                 st.error(str(exc))
@@ -722,7 +885,188 @@ def _render_priority_rules_tab(user: dict) -> None:
         st.caption("No priority corrections logged yet.")
 
 
+def _render_admin_oversight_tab(user: dict) -> None:
+    """Super Admin Oversight: admin metrics, unassigned escalation alerts, district handoff, audit filter."""
+    if "sa_oversight_flash" in st.session_state:
+        st.success(st.session_state.pop("sa_oversight_flash"))
+
+    st.markdown("### Admin Oversight Dashboard")
+
+    try:
+        admin_rows = get_admin_oversight_metrics(user)
+    except PermissionError as exc:
+        st.error(f"Permission denied: {exc}")
+        return
+
+    unread_esc = get_super_admin_notifications(user, unread_only=True, limit=100)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Managed Admins", len(admin_rows))
+    m2.metric("Unread Escalation Alerts", len(unread_esc))
+    m3.metric("Total Overdue in Admin Scopes", sum(r["overdue_in_district"] for r in admin_rows))
+
+    if admin_rows:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Admin": r["username"],
+                    "Full Name": r["full_name"],
+                    "Active": "Yes" if r["is_active"] else "No",
+                    "Districts": r["districts"],
+                    "Awaiting Assignment": r["awaiting_assignment"],
+                    "Avg Time to Assign (h)": r["avg_time_to_assign_hours"] if r["avg_time_to_assign_hours"] is not None else None,
+                    "Overdue in Districts": r["overdue_in_district"],
+                    "Reassignments": r["reassignment_count"],
+                    "Status Overrides": r["override_count"],
+                }
+                for r in admin_rows
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No admin accounts found.")
+
+    st.markdown("---")
+    st.markdown("### Reassign District Jurisdiction to Another Admin")
+
+    all_districts = get_districts(active_only=True)
+    active_admins = [u for u in get_all_users(user) if u["role"] == "admin" and u["is_active"]]
+    if all_districts and active_admins:
+        rcol1, rcol2 = st.columns(2)
+        dist_map = {d["id"]: d["name"] for d in all_districts}
+        adm_map = {a["id"]: f"{a['username']} ({a['full_name']})" for a in active_admins}
+        with rcol1:
+            sel_dist = st.selectbox(
+                "District to Reassign / Hand Off",
+                options=list(dist_map.keys()),
+                format_func=lambda did: dist_map[did],
+                key="sa_reassign_dist_sel",
+            )
+        with rcol2:
+            sel_adm = st.selectbox(
+                "Target Active Admin",
+                options=list(adm_map.keys()),
+                format_func=lambda aid: adm_map[aid],
+                key="sa_reassign_adm_sel",
+            )
+        if st.button("Reassign District to Admin", key="sa_reassign_dist_btn", type="primary"):
+            try:
+                reassign_district_to_admin(user, sel_dist, sel_adm)
+                st.session_state["sa_oversight_flash"] = (
+                    f"Reassigned district '{dist_map[sel_dist]}' to admin '{adm_map[sel_adm]}'."
+                )
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+    else:
+        st.caption("Need at least one active district and one active admin for district handoff.")
+
+    st.markdown("---")
+    st.markdown("### Filtered Audit Log (by Admin / District)")
+
+    all_admins_all = [u for u in get_all_users(user) if u["role"] in ("admin", "super_admin")]
+    adm_filter_opts: list[int | None] = [None, *[a["id"] for a in all_admins_all]]
+    adm_filter_lbls: dict[int | None, str] = {
+        None: "All Admins",
+        **{a["id"]: f"{a['username']} ({a['role']})" for a in all_admins_all},
+    }
+    dist_filter_opts: list[int | None] = [None, *[d["id"] for d in all_districts]]
+    dist_filter_lbls: dict[int | None, str] = {
+        None: "All Districts",
+        **{d["id"]: d["name"] for d in all_districts},
+    }
+
+    af1, af2 = st.columns(2)
+    with af1:
+        f_adm = st.selectbox(
+            "Filter by Actor (Admin / Super Admin)",
+            options=adm_filter_opts,
+            format_func=lambda aid: adm_filter_lbls.get(aid, str(aid)),
+            key="sa_audit_adm_filter",
+        )
+    with af2:
+        f_dist = st.selectbox(
+            "Filter by District",
+            options=dist_filter_opts,
+            format_func=lambda did: dist_filter_lbls.get(did, str(did)),
+            key="sa_audit_dist_filter",
+        )
+
+    audit_rows = get_audit_logs_filtered(user, admin_user_id=f_adm, district_id=f_dist, limit=150)
+    if audit_rows:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Time (UTC)": r["created_at"],
+                    "Incident ID": r["incident_id"],
+                    "District": r["district_name"] or "-",
+                    "Actor": r["actor_username"],
+                    "Role": r["actor_role"] or "-",
+                    "Field": r["field_name"],
+                    "Old Value": r["old_value"] or "-",
+                    "New Value": r["new_value"] or "-",
+                    "Remark": (r["remark"] or "")[:120],
+                }
+                for r in audit_rows
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.caption("No audit records match the selected filters.")
+
+
+def _render_locations_tab(user: dict) -> None:
+    """Super Admin Locations view: AP official India Post summary, stats, and reload control."""
+    if "sa_loc_flash" in st.session_state:
+        st.success(st.session_state.pop("sa_loc_flash"))
+
+    st.markdown("### Location Directory & Jurisdiction Data")
+    default_st = get_default_state()
+    stats = get_location_stats()
+
+    st.caption(
+        f"Configured default region: {default_st['name'] if default_st else 'Andhra Pradesh'} "
+        "(official data.gov.in India Post pincode directory)."
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("States", stats["states"])
+    k2.metric("Districts", stats["districts"])
+    k3.metric("Mandals", stats["mandals"])
+    k4.metric("Areas / Post Offices", stats["areas"])
+    k5.metric("Pincode Mappings", stats["pincodes"])
+
+    if st.button("Reload Official Location CSV", key="sa_reload_loc_btn", type="primary"):
+        try:
+            summary = reload_locations_admin(user)
+            st.session_state["sa_loc_flash"] = (
+                f"Location load completed: {summary['loaded_districts']} districts added, "
+                f"{summary['loaded_areas']} areas added, {summary['loaded_pincodes']} pincodes added, "
+                f"{summary['skipped_rows']} rows skipped."
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Location reload failed: {exc}")
+
+    logs = stats.get("recent_loads", [])
+    if logs:
+        st.markdown("#### Recent Location Import Logs")
+        st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
+
+    dists = get_districts(active_only=True)
+    if dists:
+        st.markdown("#### Loaded Districts")
+        st.dataframe(
+            pd.DataFrame([{"ID": d["id"], "District": d["name"]} for d in dists]),
+            width="stretch",
+            hide_index=True,
+        )
+
+
 def render_super_admin_page(user: dict) -> None:
+    run_unassigned_escalation_check()
+
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     render_html(
         f"""
@@ -732,13 +1076,42 @@ def render_super_admin_page(user: dict) -> None:
         """
     )
 
-    tab_complaints, tab_review, tab_escalations, tab_perf, tab_users, tab_departments, tab_sla, tab_prio_rules, tab_ml = st.tabs([
+    unread_notifs = get_super_admin_notifications(user, unread_only=True, limit=15)
+    if unread_notifs:
+        with st.expander(f"Unassigned Escalation & Oversight Alerts ({len(unread_notifs)} unread)", expanded=True):
+            if st.button("Mark All Alerts Read", key="sa_mark_all_notifs_read"):
+                mark_all_notifications_read(user)
+                st.rerun()
+            for n in unread_notifs:
+                ncol1, ncol2 = st.columns([5, 1], vertical_alignment="center")
+                with ncol1:
+                    st.warning(f"{n['title']}: {n['message']} ({n['created_at']} UTC)")
+                with ncol2:
+                    if st.button("Mark Read", key=f"sa_mark_notif_{n['id']}"):
+                        mark_notification_read(user, n["id"])
+                        st.rerun()
+
+    (
+        tab_complaints,
+        tab_oversight,
+        tab_review,
+        tab_escalations,
+        tab_perf,
+        tab_users,
+        tab_departments,
+        tab_locations,
+        tab_sla,
+        tab_prio_rules,
+        tab_ml,
+    ) = st.tabs([
         "Complaints",
+        "Admin Oversight",
         "Review Queue",
         "Escalations",
         "Performance",
         "User Management",
         "Departments",
+        "Locations",
         "SLA Settings",
         "Priority Rules",
         "ML Models",
@@ -746,6 +1119,9 @@ def render_super_admin_page(user: dict) -> None:
 
     with tab_complaints:
         render_staff_dashboard(user, key_prefix="sa")
+
+    with tab_oversight:
+        _render_admin_oversight_tab(user)
 
     with tab_review:
         render_review_queue_tab(user, key_prefix="sa")
@@ -761,6 +1137,9 @@ def render_super_admin_page(user: dict) -> None:
 
     with tab_departments:
         _render_department_management(user)
+
+    with tab_locations:
+        _render_locations_tab(user)
 
     with tab_sla:
         _render_sla_settings(user)

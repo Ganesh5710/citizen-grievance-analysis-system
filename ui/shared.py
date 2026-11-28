@@ -11,20 +11,24 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from core.analytics_geo import extract_map_points, filter_complaints_by_location
 from core.complaints import (
     VALID_PRIORITIES,
     VALID_STATUSES,
-    assign_complaint,
+    accept_task,
+    assign_task,
     claim_complaint,
     delete_complaint,
     get_complaint_detail,
     get_complaint_history,
     get_complaints,
     get_department_employees,
+    get_suggested_employee,
     update_complaint,
 )
 from core.departments import get_active_departments, get_all_departments
-from core.images import get_images, remove_image
+from core.images import MAX_IMAGES_PER_COMPLAINT, get_images, remove_image
+from core.locations import get_districts, get_mandals
 from core.ml_service import get_review_queue, resolve_review_item
 from core.performance import get_employee_own_performance, get_performance_metrics
 from core.permissions import can
@@ -35,12 +39,14 @@ STATUS_OPTIONS = list(VALID_STATUSES)
 PRIORITY_OPTIONS = list(VALID_PRIORITIES)
 
 _STATUS_BADGE_CLASSES = {
-    "Pending":     "cgs-badge-neutral",
-    "Assigned":    "cgs-badge-primary",
-    "In Progress": "cgs-badge-warning",
-    "Resolved":    "cgs-badge-success",
-    "Reopened":    "cgs-badge-danger",
-    "Closed":      "cgs-badge-neutral",
+    "Submitted":           "cgs-badge-neutral",
+    "Awaiting Assignment": "cgs-badge-warning",
+    "Pending":             "cgs-badge-neutral",
+    "Assigned":            "cgs-badge-primary",
+    "In Progress":         "cgs-badge-warning",
+    "Resolved":            "cgs-badge-success",
+    "Reopened":            "cgs-badge-danger",
+    "Closed":              "cgs-badge-neutral",
 }
 
 _PRIORITY_BADGE_CLASSES = {
@@ -263,6 +269,25 @@ def render_complaint_card(detail: dict) -> None:
         dur_line = f"<p><b>Extracted Duration:</b> {html.escape(dur_disp)} &mdash; <i>\"{html.escape(dur_txt)}\"</i>{html.escape(conf_str)}</p>"
     reason_line = f'<p class="cgs-muted" style="font-size:13px;"><b>Priority Reason:</b> {html.escape(prio_reason)}</p>' if prio_reason else ""
 
+    dist_name = detail.get("district_name") or ""
+    area_name = detail.get("area_name") or ""
+    pincode_val = detail.get("pincode") or ""
+    mandal_name = detail.get("mandal_name") or ""
+    geo_bits = [x for x in (dist_name, mandal_name, area_name, f"PIN {pincode_val}" if pincode_val else "") if x]
+    geo_line = f"<p><b>Jurisdiction:</b> {html.escape(' | '.join(geo_bits))}</p>" if geo_bits else ""
+    instr_val = detail.get("assignment_instructions") or ""
+    instr_line = f"<p><b>Assignment Instructions:</b> {html.escape(instr_val)}</p>" if instr_val else ""
+    assigned_by_esc = html.escape(str(detail.get("assigned_by_username") or ""))
+    accepted_esc = html.escape(str(detail.get("accepted_at") or ""))
+    assign_meta = ""
+    if assigned_by_esc or accepted_esc:
+        parts = []
+        if assigned_by_esc:
+            parts.append(f"<b>Assigned By:</b> {assigned_by_esc}")
+        if accepted_esc:
+            parts.append(f"<b>Accepted (UTC):</b> {accepted_esc}")
+        assign_meta = "<p>" + " &nbsp;|&nbsp; ".join(parts) + "</p>"
+
     text_html = text_esc.replace("\n", "<br/>")
     render_html(
         f"""
@@ -276,7 +301,10 @@ def render_complaint_card(detail: dict) -> None:
                 </span>
             </div>
             <p><b>Department:</b> {dept_esc} &nbsp;|&nbsp; <b>Assigned To:</b> {assigned_esc}</p>
+            {assign_meta}
             <p><b>Location:</b> {loc_esc}</p>
+            {geo_line}
+            {instr_line}
             <p><b>Due At (UTC):</b> {due_esc} &nbsp;|&nbsp; <b>Photos:</b> {int(detail.get("photo_count", 0))}</p>
             {dur_line}
             {reason_line}
@@ -315,7 +343,8 @@ def render_attachments(user: dict, complaint_id: int, key_prefix: str) -> None:
                     with st.expander("Full size"):
                         st.image(img["data"], width="stretch")
                 size_kb = round(img["file_size"] / 1024.0, 1)
-                st.caption(f"{img['original_filename']} ({size_kb} KB)")
+                stage_lbl = "After" if img.get("photo_stage") == "after" else "Initial"
+                st.caption(f"[{stage_lbl}] {img['original_filename']} ({size_kb} KB)")
 
                 if can_remove:
                     with st.expander("Remove image"):
@@ -462,8 +491,26 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
     flash_key = f"{key_prefix}_flash_msg"
     is_closed_or_resolved = detail.get("status") in ("Resolved", "Closed")
 
-    # Claim button (employee on unassigned complaint in their department)
-    if can(user, "claim_complaint") and detail.get("assigned_to") is None and not is_closed_or_resolved:
+    # Claim button (legacy district-less employee queue) OR Accept Task (assigned employee)
+    if can(user, "accept_task") and detail.get("assigned_to") == user.get("id") and detail.get("status") == "Assigned" and not detail.get("accepted_at"):
+        if st.button(
+            f"Accept Assigned Task #{detail['incident_id']}",
+            key=f"{key_prefix}_accept_btn_{detail['id']}",
+            type="primary",
+        ):
+            try:
+                accept_task(user, detail["id"])
+                st.session_state[flash_key] = f"Accepted task {detail['incident_id']} (In Progress)."
+                st.rerun()
+            except (PermissionError, ValueError) as exc:
+                st.error(str(exc))
+
+    if (
+        can(user, "claim_complaint")
+        and detail.get("assigned_to") is None
+        and detail.get("district_id") is None
+        and not is_closed_or_resolved
+    ):
         if st.button(
             f"Claim Complaint #{detail['incident_id']}",
             key=f"{key_prefix}_claim_btn_{detail['id']}",
@@ -476,60 +523,94 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
             except (PermissionError, ValueError) as exc:
                 st.error(str(exc))
 
-    # Assignment / Reassignment form (Admin & Super Admin)
-    if can(user, "assign_complaint"):
+    # Hierarchical Assignment / Reassignment form (Admin within jurisdiction & Super Admin)
+    if can(user, "assign_task"):
         st.markdown("---")
         st.markdown(f"### Assign Complaint #{detail['incident_id']}")
-        dept_emps = get_department_employees(user, detail["department_id"])
+        dept_emps = get_department_employees(
+            user,
+            detail["department_id"],
+            district_id=detail.get("district_id"),
+            mandal_id=detail.get("mandal_id"),
+        )
+        suggested_emp = get_suggested_employee(user, detail["id"])
+        if suggested_emp and detail.get("assigned_to") is None:
+            st.info(
+                f"Suggested Employee (matching department & jurisdiction, fewest open tasks): "
+                f"**{suggested_emp['username']}** ({suggested_emp['full_name']}, "
+                f"{suggested_emp['open_count']} open)"
+            )
+
         emp_options: list[int | None] = [None, *[e["id"] for e in dept_emps]]
-        emp_labels: dict[int | None, str] = {None: "Unassigned"}
+        emp_labels: dict[int | None, str] = {None: "Unassigned / Awaiting Assignment"}
         for e in dept_emps:
-            emp_labels[e["id"]] = f"{e['username']} ({e['full_name']}) - {e['open_count']} open"
+            sugg_tag = " [Suggested]" if suggested_emp and e["id"] == suggested_emp["id"] else ""
+            emp_labels[e["id"]] = f"{e['username']} ({e['full_name']}) - {e['open_count']} open{sugg_tag}"
 
         cur_emp_id = detail.get("assigned_to")
+        if cur_emp_id is None and suggested_emp is not None:
+            default_emp_id = suggested_emp["id"]
+        else:
+            default_emp_id = cur_emp_id
         if cur_emp_id not in emp_options and cur_emp_id is not None:
             emp_options.append(cur_emp_id)
             emp_labels[cur_emp_id] = f"{detail.get('assigned_username', 'Employee')} (Inactive / Other)"
 
         ver_assign = f"{detail['id']}_{detail['assigned_to']}_{detail['department_id']}_{detail['updated_at']}"
         with st.form(key=f"{key_prefix}_assign_form_{ver_assign}"):
-            col_a1, col_a2 = st.columns([2, 3])
+            col_a1, col_a2 = st.columns(2)
             with col_a1:
                 chosen_emp_id = st.selectbox(
-                    "Assignee (active department employees)",
+                    "Assignee (matching department & jurisdiction)",
                     options=emp_options,
-                    index=emp_options.index(cur_emp_id) if cur_emp_id in emp_options else 0,
+                    index=emp_options.index(default_emp_id) if default_emp_id in emp_options else 0,
                     format_func=lambda eid: emp_labels[eid],
                     key=f"{key_prefix}_assignee_{ver_assign}",
                 )
+                custom_due = st.text_input(
+                    "Due At (UTC YYYY-MM-DD HH:MM:SS, optional)",
+                    value=str(detail.get("due_at") or ""),
+                    key=f"{key_prefix}_assign_due_{ver_assign}",
+                )
             with col_a2:
+                assign_instr = st.text_input(
+                    "Task Instructions for Employee (optional)",
+                    value=str(detail.get("assignment_instructions") or ""),
+                    key=f"{key_prefix}_assign_instr_{ver_assign}",
+                    placeholder="Steps or field inspection notes...",
+                )
                 assign_remark = st.text_input(
-                    "Assignment Note (optional)",
+                    "Assignment / Reassignment Reason",
                     key=f"{key_prefix}_assign_note_{ver_assign}",
                     placeholder="Reason for assignment or reassignment...",
                 )
-            if st.form_submit_button("Update Assignment"):
+            if st.form_submit_button("Assign / Reassign Task", type="primary"):
                 try:
-                    assign_complaint(user, detail["id"], chosen_emp_id, assign_remark.strip())
-                    st.session_state[flash_key] = (
-                        f"Assignment updated for {detail['incident_id']}."
+                    assign_task(
+                        user,
+                        detail["id"],
+                        chosen_emp_id,
+                        due_at=custom_due.strip() or None,
+                        instructions=assign_instr.strip(),
+                        reason=assign_remark.strip(),
                     )
+                    st.session_state[flash_key] = f"Assignment updated for {detail['incident_id']}."
                     st.rerun()
                 except (PermissionError, ValueError) as exc:
                     st.error(str(exc))
 
-    # Status / Remark / Field Edit form
-    if can(user, "update_status_remark"):
+    # Status / Remark / After-Photo / Field Edit form
+    if can(user, "update_task_status"):
         st.markdown("---")
         st.markdown(f"### Update Complaint #{detail['incident_id']}")
 
         if user.get("role") == "employee" and detail.get("assigned_to") != user.get("id"):
             st.info(
-                "This complaint is not assigned to you. Claim it from the Unassigned queue "
-                "or ask an administrator to assign it to you before updating status."
+                "This complaint is not assigned to you. Ask your District Admin to assign it to you."
             )
         else:
             can_edit_fields = can(user, "edit_complaint_fields")
+            is_admin_actor = user.get("role") in ("admin", "super_admin")
             version_suffix = f"{detail['id']}_{detail['updated_at']}"
 
             current_status = detail.get("status", "Pending")
@@ -564,7 +645,7 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                     col_dept, col_prio = st.columns(2)
                     with col_dept:
                         selected_dept_id = st.selectbox(
-                            "Department (auto-reassigns employee on change)",
+                            "Department (returns district task to Awaiting Assignment on change)",
                             options=dept_ids,
                             index=dept_idx,
                             format_func=lambda did: dept_labels[did],
@@ -578,11 +659,29 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                             key=f"{key_prefix}_prio_{version_suffix}",
                         )
 
+                override_reason = ""
+                if is_admin_actor:
+                    override_reason = st.text_input(
+                        "Mandatory Override Reason (required if overriding status)",
+                        key=f"{key_prefix}_override_reason_{version_suffix}",
+                        placeholder="Required reason for admin status override...",
+                    )
+
                 remark = st.text_area(
                     "Remark (closing remark of at least 10 chars required when resolving)",
-                    placeholder="Add notes or resolution details...",
+                    placeholder="Add progress notes or closing resolution details...",
                     key=f"{key_prefix}_remark_{version_suffix}",
                 )
+
+                after_uploads = None
+                if user.get("role") == "employee":
+                    after_uploads = st.file_uploader(
+                        "Attach 'After' Repair Photos (optional, JPG/PNG/WebP)",
+                        type=["jpg", "jpeg", "png", "webp"],
+                        accept_multiple_files=True,
+                        key=f"{key_prefix}_after_photos_{version_suffix}",
+                    )
+
                 save_btn = st.form_submit_button("Save Update", type="primary")
 
             if save_btn:
@@ -594,6 +693,8 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                         remark=remark.strip(),
                         department_id=selected_dept_id if can_edit_fields else None,
                         priority=selected_priority if can_edit_fields else None,
+                        override_reason=override_reason.strip(),
+                        after_files=after_uploads or None,
                     )
                     st.session_state[flash_key] = f"Complaint {detail['incident_id']} updated."
                     st.rerun()
@@ -633,11 +734,66 @@ def _render_edit_and_delete_controls(user: dict, detail: dict, key_prefix: str) 
                         st.error(str(exc))
 
 
+def _render_hotspot_map(complaints: list[dict], key_prefix: str) -> None:
+    """Render geographic complaint markers & heatmap with area centroid fallback."""
+    points = extract_map_points(complaints)
+    if not points:
+        return
+
+    with st.expander(f"Geographic Hotspot Map & Heatmap ({len(points)} mapped)", expanded=False):
+        avg_lat = sum(p["lat"] for p in points) / len(points)
+        avg_lon = sum(p["lon"] for p in points) / len(points)
+
+        rendered_folium = False
+        try:
+            import folium
+            from folium.plugins import HeatMap
+            from streamlit_folium import st_folium
+
+            fmap = folium.Map(location=[avg_lat, avg_lon], zoom_start=7)
+            HeatMap([[p["lat"], p["lon"], p["weight"]] for p in points], radius=18, blur=14).add_to(fmap)
+            for p in points[:250]:
+                label = f"{p['incident_id']} | {p['department']} | {p['priority']} | {p['district']} ({p['source']})"
+                color = "red" if p["priority"] == "High" else ("orange" if p["priority"] == "Medium" else "blue")
+                folium.CircleMarker(
+                    location=[p["lat"], p["lon"]],
+                    radius=6,
+                    popup=folium.Popup(label, max_width=280),
+                    color=color,
+                    fill=True,
+                    fill_opacity=0.8,
+                ).add_to(fmap)
+            st_folium(fmap, height=360, width=None, returned_objects=[], key=f"{key_prefix}_hotspot_folium")
+            rendered_folium = True
+        except Exception:
+            rendered_folium = False
+
+        if not rendered_folium:
+            pt_df = pd.DataFrame(points)
+            fig_geo = px.scatter_geo(
+                pt_df,
+                lat="lat",
+                lon="lon",
+                color="priority",
+                hover_name="incident_id",
+                hover_data=["department", "status", "district", "pincode", "source"],
+                title="Complaint Geo Distribution (Offline Scatter Fallback)",
+            )
+            fig_geo.update_geos(fitbounds="locations", showcountries=True, showsubunits=True)
+            fig_geo.update_layout(height=360)
+            st.plotly_chart(fig_geo, width="stretch", theme="streamlit")
+
+        st.caption(
+            f"Showing {len(points)} mapped complaint(s) "
+            f"(pinpoint GPS + area centroid fallback when pin omitted)."
+        )
+
+
 def render_staff_dashboard(user: dict, key_prefix: str) -> None:
     """
     Shared complaint dashboard for Employee, Admin, and Super Admin.
     Runs automated escalation check on load, shows KPIs including Overdue,
-    employee queue tabs / compact self-performance, Plotly charts, and filters.
+    employee queue tabs / compact self-performance, Plotly charts, location filters, and hotspot map.
     """
     run_escalation_check()
 
@@ -659,7 +815,12 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
 
     if is_employee:
         dept_label = user.get("department") or "Unassigned"
-        st.caption(f"Department scope: {dept_label}")
+        scope_parts = [f"Department scope: {dept_label}"]
+        if user.get("district_name"):
+            scope_parts.append(f"District: {user['district_name']}")
+        if user.get("mandal_name"):
+            scope_parts.append(f"Mandal: {user['mandal_name']}")
+        st.caption(" | ".join(scope_parts))
         own_perf = get_employee_own_performance(user)
         p1, p2, p3, p4, p5 = st.columns(5)
         p1.metric("Assigned Handled", own_perf["handled"])
@@ -677,14 +838,14 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
     # KPIs
     st.markdown("### Dashboard Overview")
     total = len(complaints)
-    pending = sum(1 for c in complaints if c.get("status") == "Pending")
+    awaiting = sum(1 for c in complaints if c.get("status") in ("Awaiting Assignment", "Submitted", "Pending"))
     high_priority = sum(1 for c in complaints if c.get("priority") == "High")
     overdue_cnt = sum(1 for c in complaints if c.get("is_overdue"))
     resolved = sum(1 for c in complaints if c.get("status") in ("Resolved", "Closed"))
 
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Complaints", total)
-    col2.metric("Pending", pending)
+    col2.metric("Awaiting / Pending", awaiting)
     col3.metric("High Priority", high_priority)
     col4.metric("Overdue", overdue_cnt)
     col5.metric("Resolved / Closed", resolved)
@@ -696,12 +857,20 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
 
     queue_mode = "All"
     if is_employee:
-        queue_mode = st.radio(
-            "Queue View",
-            options=["My Queue", "Unassigned", "All Department"],
-            horizontal=True,
-            key=f"{key_prefix}_queue_mode",
-        )
+        if user.get("district_id"):
+            queue_mode = st.radio(
+                "Queue View",
+                options=["My Queue"],
+                horizontal=True,
+                key=f"{key_prefix}_queue_mode",
+            )
+        else:
+            queue_mode = st.radio(
+                "Queue View",
+                options=["My Queue", "Unassigned", "All Department"],
+                horizontal=True,
+                key=f"{key_prefix}_queue_mode",
+            )
 
     if is_employee:
         filter_col1, filter_col2 = st.columns([3, 1], vertical_alignment="bottom")
@@ -732,6 +901,48 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
     with filter_col2:
         overdue_only = st.checkbox("Overdue only", key=f"{key_prefix}_overdue_only")
 
+    # Jurisdiction / Location filters
+    all_districts = get_districts(active_only=True)
+    dist_opts: list[int | None] = [None, *[d["id"] for d in all_districts]]
+    dist_lbls: dict[int | None, str] = {None: "All Districts"}
+    for d in all_districts:
+        dist_lbls[d["id"]] = d["name"]
+
+    lcol1, lcol2, lcol3 = st.columns([2, 2, 1])
+    with lcol1:
+        selected_dist_id = st.selectbox(
+            "Filter by District",
+            options=dist_opts,
+            format_func=lambda did: dist_lbls.get(did, str(did)),
+            key=f"{key_prefix}_district_filter",
+        )
+    selected_mandal_id = None
+    mandal_rows = get_mandals(selected_dist_id) if selected_dist_id is not None else []
+    with lcol2:
+        if mandal_rows:
+            m_opts: list[int | None] = [None, *[m["id"] for m in mandal_rows]]
+            m_lbls = {None: "All Mandals", **{m["id"]: m["name"] for m in mandal_rows}}
+            selected_mandal_id = st.selectbox(
+                "Filter by Mandal",
+                options=m_opts,
+                format_func=lambda mid: m_lbls.get(mid, str(mid)),
+                key=f"{key_prefix}_mandal_filter",
+            )
+        else:
+            st.text_input(
+                "Filter by Mandal",
+                value="N/A (no mandal data)" if selected_dist_id else "Select district first",
+                disabled=True,
+                key=f"{key_prefix}_mandal_disabled",
+            )
+    with lcol3:
+        pincode_filter = st.text_input(
+            "Filter by Pincode",
+            max_chars=6,
+            placeholder="e.g. 522002",
+            key=f"{key_prefix}_pincode_filter",
+        )
+
     search_query = st.text_input(
         "Search by description, Incident ID, Location, Department, or Assignee",
         key=f"{key_prefix}_search",
@@ -750,6 +961,13 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
     if overdue_only:
         filtered = [c for c in filtered if c.get("is_overdue")]
 
+    filtered = filter_complaints_by_location(
+        filtered,
+        district_id=selected_dist_id,
+        mandal_id=selected_mandal_id,
+        pincode=pincode_filter.strip() or None,
+    )
+
     if search_query.strip():
         q = search_query.strip().lower()
         filtered = [
@@ -758,8 +976,13 @@ def render_staff_dashboard(user: dict, key_prefix: str) -> None:
             or q in (c.get("incident_id") or "").lower()
             or q in (c.get("department") or "").lower()
             or q in (c.get("location") or "").lower()
+            or q in (c.get("district_name") or "").lower()
+            or q in (c.get("area_name") or "").lower()
+            or q in (c.get("pincode") or "").lower()
             or q in (c.get("assigned_username") or "unassigned").lower()
         ]
+
+    _render_hotspot_map(filtered, key_prefix=key_prefix)
 
     page_size = 25
     total_filtered = len(filtered)

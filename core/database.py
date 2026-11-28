@@ -75,6 +75,51 @@ CREATE TABLE IF NOT EXISTS wards (
     polygon TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS states (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT UNIQUE NOT NULL,
+    code      TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS districts (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_id  INTEGER NOT NULL REFERENCES states(id),
+    name      TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(state_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS mandals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    district_id INTEGER NOT NULL REFERENCES districts(id),
+    name        TEXT NOT NULL,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(district_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS areas (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    district_id INTEGER NOT NULL REFERENCES districts(id),
+    mandal_id   INTEGER REFERENCES mandals(id),
+    name        TEXT NOT NULL,
+    latitude    REAL,
+    longitude   REAL,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(district_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS pincodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pincode     TEXT NOT NULL CHECK(length(pincode) = 6),
+    area_id     INTEGER NOT NULL REFERENCES areas(id),
+    district_id INTEGER NOT NULL REFERENCES districts(id),
+    state_id    INTEGER NOT NULL REFERENCES states(id),
+    UNIQUE(pincode, area_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pincodes_code ON pincodes(pincode);
+
 CREATE TABLE IF NOT EXISTS users (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     username              TEXT UNIQUE NOT NULL,
@@ -83,6 +128,8 @@ CREATE TABLE IF NOT EXISTS users (
     salt                  TEXT NOT NULL,
     role                  TEXT NOT NULL CHECK(role IN ('user','employee','admin','super_admin')),
     department_id         INTEGER REFERENCES departments(id),
+    district_id           INTEGER REFERENCES districts(id),
+    mandal_id             INTEGER REFERENCES mandals(id),
     is_active             INTEGER NOT NULL DEFAULT 1,
     must_change_password  INTEGER NOT NULL DEFAULT 0,
     failed_login_attempts INTEGER NOT NULL DEFAULT 0,
@@ -92,6 +139,15 @@ CREATE TABLE IF NOT EXISTS users (
     email                 TEXT DEFAULT '',
     email_notifications   INTEGER NOT NULL DEFAULT 1,
     created_at            TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS admin_jurisdictions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id),
+    district_id   INTEGER NOT NULL REFERENCES districts(id),
+    department_id INTEGER REFERENCES departments(id),
+    created_at    TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, district_id, department_id)
 );
 
 CREATE TABLE IF NOT EXISTS login_attempts (
@@ -118,15 +174,25 @@ CREATE TABLE IF NOT EXISTS complaints (
     location         TEXT NOT NULL DEFAULT '',
     department_id    INTEGER NOT NULL REFERENCES departments(id),
     ward_id          INTEGER REFERENCES wards(id),
+    state_id         INTEGER REFERENCES states(id),
+    district_id      INTEGER REFERENCES districts(id),
+    mandal_id        INTEGER REFERENCES mandals(id),
+    area_id          INTEGER REFERENCES areas(id),
+    pincode          TEXT DEFAULT '',
     latitude         REAL,
     longitude        REAL,
     priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
     status           TEXT NOT NULL DEFAULT 'Pending'
-                         CHECK(status IN ('Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
+                         CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
     assigned_to      INTEGER REFERENCES users(id),
+    assigned_by      INTEGER REFERENCES users(id),
     assigned_at      TEXT,
+    accepted_at      TEXT,
+    assignment_instructions TEXT DEFAULT '',
     due_at           TEXT,
     escalation_level INTEGER NOT NULL DEFAULT 0 CHECK(escalation_level IN (0, 1, 2)),
+    unassigned_escalated INTEGER NOT NULL DEFAULT 0,
+    unassigned_escalated_at TEXT,
     resolved_at             TEXT,
     reopen_count            INTEGER NOT NULL DEFAULT 0,
     is_deleted              INTEGER NOT NULL DEFAULT 0,
@@ -165,6 +231,7 @@ CREATE TABLE IF NOT EXISTS complaint_images (
     original_filename TEXT NOT NULL,
     mime_type         TEXT NOT NULL,
     file_size         INTEGER NOT NULL,
+    photo_stage       TEXT NOT NULL DEFAULT 'initial',
     created_at        TEXT DEFAULT (datetime('now')),
     is_removed        INTEGER NOT NULL DEFAULT 0,
     removed_by        INTEGER REFERENCES users(id),
@@ -248,6 +315,31 @@ CREATE TABLE IF NOT EXISTS duration_extraction_logs (
     status       TEXT NOT NULL DEFAULT 'Failed',
     reason       TEXT DEFAULT '',
     created_at   TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER REFERENCES users(id),
+    target_role  TEXT DEFAULT '',
+    complaint_id INTEGER REFERENCES complaints(id),
+    incident_id  TEXT DEFAULT '',
+    title        TEXT NOT NULL,
+    message      TEXT NOT NULL,
+    is_read      INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS location_load_logs (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path          TEXT NOT NULL,
+    default_state        TEXT NOT NULL,
+    total_rows           INTEGER NOT NULL DEFAULT 0,
+    loaded_areas         INTEGER NOT NULL DEFAULT 0,
+    loaded_pincodes      INTEGER NOT NULL DEFAULT 0,
+    skipped_rows         INTEGER NOT NULL DEFAULT 0,
+    mandal_level_present INTEGER NOT NULL DEFAULT 0,
+    notes                TEXT DEFAULT '',
+    loaded_at            TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -367,6 +459,8 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         return
     add_cols = [
         ("department_id",         "INTEGER REFERENCES departments(id)"),
+        ("district_id",           "INTEGER REFERENCES districts(id)"),
+        ("mandal_id",             "INTEGER REFERENCES mandals(id)"),
         ("is_active",             "INTEGER NOT NULL DEFAULT 1"),
         ("must_change_password",  "INTEGER NOT NULL DEFAULT 0"),
         ("failed_login_attempts", "INTEGER NOT NULL DEFAULT 0"),
@@ -488,6 +582,8 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
         not required_cols.issubset(cols)
         or "'Reopened'" not in ddl
         or "'Closed'" not in ddl
+        or "'Awaiting Assignment'" not in ddl
+        or "'Submitted'" not in ddl
     )
     if not needs_rebuild:
         return
@@ -511,18 +607,36 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
             location         TEXT NOT NULL DEFAULT '',
             department_id    INTEGER NOT NULL REFERENCES departments(id),
             ward_id          INTEGER REFERENCES wards(id),
+            state_id         INTEGER REFERENCES states(id),
+            district_id      INTEGER REFERENCES districts(id),
+            mandal_id        INTEGER REFERENCES mandals(id),
+            area_id          INTEGER REFERENCES areas(id),
+            pincode          TEXT DEFAULT '',
             latitude         REAL,
             longitude        REAL,
             priority         TEXT NOT NULL CHECK(priority IN ('High','Medium','Low')),
             status           TEXT NOT NULL DEFAULT 'Pending'
-                                 CHECK(status IN ('Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
+                                 CHECK(status IN ('Submitted','Awaiting Assignment','Pending','Assigned','In Progress','Resolved','Reopened','Closed')),
             assigned_to      INTEGER REFERENCES users(id),
+            assigned_by      INTEGER REFERENCES users(id),
             assigned_at      TEXT,
+            accepted_at      TEXT,
+            assignment_instructions TEXT DEFAULT '',
             due_at           TEXT,
             escalation_level INTEGER NOT NULL DEFAULT 0 CHECK(escalation_level IN (0, 1, 2)),
+            unassigned_escalated INTEGER NOT NULL DEFAULT 0,
+            unassigned_escalated_at TEXT,
             resolved_at      TEXT,
             reopen_count     INTEGER NOT NULL DEFAULT 0,
             is_deleted       INTEGER NOT NULL DEFAULT 0,
+            ml_suggested_department TEXT,
+            ml_confidence           REAL,
+            ml_top_terms            TEXT DEFAULT '[]',
+            duration_hours          REAL,
+            duration_matched_text   TEXT DEFAULT '',
+            duration_confidence     REAL,
+            is_recurring            INTEGER NOT NULL DEFAULT 0,
+            priority_reason         TEXT DEFAULT '',
             created_at       TEXT DEFAULT (datetime('now')),
             updated_at       TEXT DEFAULT (datetime('now'))
         )
@@ -557,16 +671,43 @@ def _migrate_complaints(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO complaints_new
                 (id, incident_id, user_id, text, location, department_id, ward_id,
-                 latitude, longitude, priority, status, assigned_to, assigned_at,
-                 due_at, escalation_level, resolved_at, reopen_count, is_deleted,
+                 state_id, district_id, mandal_id, area_id, pincode,
+                 latitude, longitude, priority, status, assigned_to, assigned_by, assigned_at,
+                 accepted_at, assignment_instructions, due_at, escalation_level,
+                 unassigned_escalated, unassigned_escalated_at,
+                 resolved_at, reopen_count, is_deleted,
+                 ml_suggested_department, ml_confidence, ml_top_terms,
+                 duration_hours, duration_matched_text, duration_confidence, is_recurring, priority_reason,
                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 r["id"], r["incident_id"], r["user_id"], r["text"], r["location"] or "",
-                mapped_dept_id, ward_id, lat, lon, prio, r["status"],
-                assigned_to, assigned_at, due_at, esc_level, resolved_at, reopen_count,
-                is_del, r["created_at"], r["updated_at"],
+                mapped_dept_id, ward_id,
+                r["state_id"] if "state_id" in cols else None,
+                r["district_id"] if "district_id" in cols else None,
+                r["mandal_id"] if "mandal_id" in cols else None,
+                r["area_id"] if "area_id" in cols else None,
+                (r["pincode"] if "pincode" in cols else "") or "",
+                lat, lon, prio, r["status"],
+                assigned_to,
+                r["assigned_by"] if "assigned_by" in cols else None,
+                assigned_at,
+                r["accepted_at"] if "accepted_at" in cols else None,
+                (r["assignment_instructions"] if "assignment_instructions" in cols else "") or "",
+                due_at, esc_level,
+                (r["unassigned_escalated"] if "unassigned_escalated" in cols else 0) or 0,
+                r["unassigned_escalated_at"] if "unassigned_escalated_at" in cols else None,
+                resolved_at, reopen_count, is_del,
+                r["ml_suggested_department"] if "ml_suggested_department" in cols else None,
+                r["ml_confidence"] if "ml_confidence" in cols else None,
+                (r["ml_top_terms"] if "ml_top_terms" in cols else "[]") or "[]",
+                r["duration_hours"] if "duration_hours" in cols else None,
+                (r["duration_matched_text"] if "duration_matched_text" in cols else "") or "",
+                r["duration_confidence"] if "duration_confidence" in cols else None,
+                (r["is_recurring"] if "is_recurring" in cols else 0) or 0,
+                (r["priority_reason"] if "priority_reason" in cols else "") or "",
+                r["created_at"], r["updated_at"],
             ),
         )
 
@@ -623,6 +764,16 @@ def init_db() -> None:
             conn.executescript(_SCHEMA_SQL)
             c_cols = _table_columns(conn, "complaints")
             for col_name, col_def in (
+                ("state_id", "INTEGER REFERENCES states(id)"),
+                ("district_id", "INTEGER REFERENCES districts(id)"),
+                ("mandal_id", "INTEGER REFERENCES mandals(id)"),
+                ("area_id", "INTEGER REFERENCES areas(id)"),
+                ("pincode", "TEXT DEFAULT ''"),
+                ("assigned_by", "INTEGER REFERENCES users(id)"),
+                ("accepted_at", "TEXT"),
+                ("assignment_instructions", "TEXT DEFAULT ''"),
+                ("unassigned_escalated", "INTEGER NOT NULL DEFAULT 0"),
+                ("unassigned_escalated_at", "TEXT"),
                 ("ml_suggested_department", "TEXT"),
                 ("ml_confidence", "REAL"),
                 ("ml_top_terms", "TEXT DEFAULT '[]'"),
@@ -634,6 +785,11 @@ def init_db() -> None:
             ):
                 if col_name not in c_cols:
                     conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")
+            img_cols = _table_columns(conn, "complaint_images")
+            if img_cols and "photo_stage" not in img_cols:
+                conn.execute(
+                    "ALTER TABLE complaint_images ADD COLUMN photo_stage TEXT NOT NULL DEFAULT 'initial'"
+                )
             _seed_departments_in_conn(conn)
             _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)
