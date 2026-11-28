@@ -23,6 +23,7 @@ import core.database as _db
 from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
 from core.moderation import generate_captcha_challenge, is_captcha_enabled, verify_captcha_answer
 from core.privacy import get_privacy_notice_markdown
+from core.public_status import lookup_public_status
 from ui.shared import inject_shared_css, render_html, render_notification_center
 
 # ── Page config (must be first Streamlit call) ───────────────────────────────
@@ -86,7 +87,13 @@ def render_auth_page() -> None:
 
         _show_default_password_warning()
 
-        tab_login, tab_signup, tab_public, tab_privacy = st.tabs(["Login", "Sign Up", "Public Transparency", "Privacy Notice"])
+        tab_login, tab_signup, tab_track, tab_public, tab_privacy = st.tabs([
+            "Login",
+            "Sign Up",
+            "Track Ticket (Public Status)",
+            "Public Transparency",
+            "Privacy Notice",
+        ])
 
         with tab_login:
             with st.form("login_form"):
@@ -176,6 +183,41 @@ def render_auth_page() -> None:
                         st.rerun()
                     except ValueError as exc:
                         st.error(str(exc))
+
+        with tab_track:
+            st.markdown("#### Public Ticket Status Lookup (No Login Required)")
+            st.caption(
+                "Enter your Ticket ID and the last 4 digits of your registered phone number "
+                "(or last 4 characters of your registered email) to inspect live status without exposing personal details."
+            )
+            qp_ticket = str(st.query_params.get("ticket", "") or "").strip()
+            with st.form("public_ticket_lookup_form"):
+                pt_id = st.text_input("Ticket ID", value=qp_ticket, placeholder="e.g. CIV-2026-0001", key="pub_track_id")
+                pt_last4 = st.text_input(
+                    "Last 4 digits of phone OR last 4 chars of email",
+                    max_chars=4,
+                    key="pub_track_last4",
+                )
+                pt_go = st.form_submit_button("Check Ticket Status", type="primary")
+
+            if pt_go:
+                try:
+                    info = lookup_public_status(pt_id.strip(), pt_last4.strip())
+                    st.success(f"Ticket #{info['incident_id']} — Status: {info['status']} ({info['department']})")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Department", info["department"])
+                    c2.metric("Priority", info["priority"])
+                    c3.metric("District", info["district"] or "-")
+                    st.write(
+                        f"**Created:** {info['created_at']} UTC | **Updated:** {info['updated_at']} UTC"
+                        + (f" | **SLA Due:** {info['due_at']} UTC" if info.get("due_at") else "")
+                    )
+                    if info.get("timeline"):
+                        st.markdown("##### Public Status Timeline")
+                        for ev in info["timeline"]:
+                            st.write(f"- `{ev['timestamp']} UTC` — {ev['event']}")
+                except ValueError as exc:
+                    st.error(str(exc))
 
         with tab_public:
             st.markdown("#### Public District Transparency Dashboard")

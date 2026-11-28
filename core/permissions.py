@@ -24,6 +24,7 @@ PERMISSIONS: dict[str, set[str]] = {
     "remove_image":          {"admin", "super_admin"},
     "view_review_queue":     {"admin", "super_admin"},
     "resolve_review_item":   {"admin", "super_admin"},
+    "export_reports":        {"admin", "super_admin"},
     "view_analytics":        {"employee", "admin", "super_admin"},
     "delete_complaint":      {"super_admin"},
     "manage_users":          {"super_admin"},

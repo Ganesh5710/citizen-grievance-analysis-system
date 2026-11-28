@@ -21,6 +21,7 @@ from core.complaints import (
     withdraw_complaint,
 )
 from core.privacy import anonymize_own_account, export_own_data, get_privacy_notice_markdown
+from core.public_status import build_ticket_tracking_url, generate_ticket_qr_png
 from core.departments import get_active_departments
 from core.images import MAX_IMAGES_PER_COMPLAINT, add_images
 from core.locations import (
@@ -599,6 +600,19 @@ def render_citizen_page(user: dict) -> None:
                 f"Detected Priority: {ticket['priority']}{est_part}."
                 f"{ticket.get('ml_hint', '')}"
             )
+            track_url = build_ticket_tracking_url(ticket["incident_id"])
+            qr_col1, qr_col2 = st.columns([1, 4], vertical_alignment="center")
+            with qr_col1:
+                st.image(generate_ticket_qr_png(ticket["incident_id"]), width=130, caption="Scan to Track")
+            with qr_col2:
+                st.markdown(f"**Public Status Tracking Link:** `{track_url}`")
+                st.download_button(
+                    "Download Ticket QR (PNG)",
+                    data=generate_ticket_qr_png(ticket["incident_id"]),
+                    file_name=f"qr_{ticket['incident_id']}.png",
+                    mime="image/png",
+                    key=f"citizen_dl_qr_{ticket['incident_id']}",
+                )
 
         active_depts = get_active_departments()
         selected_dept_id = st.session_state.get("citizen_selected_dept_id")
@@ -668,6 +682,20 @@ def render_citizen_page(user: dict) -> None:
                     return
 
                 render_complaint_card(detail)
+                with st.expander(f"QR Code & Public Tracking Link — #{detail['incident_id']}"):
+                    q_url = build_ticket_tracking_url(detail["incident_id"])
+                    qc1, qc2 = st.columns([1, 4], vertical_alignment="center")
+                    with qc1:
+                        st.image(generate_ticket_qr_png(detail["incident_id"]), width=120)
+                    with qc2:
+                        st.markdown(f"**Tracking URL:** `{q_url}`")
+                        st.download_button(
+                            "Download Ticket QR (PNG)",
+                            data=generate_ticket_qr_png(detail["incident_id"]),
+                            file_name=f"qr_{detail['incident_id']}.png",
+                            mime="image/png",
+                            key=f"citizen_my_qr_{detail['id']}",
+                        )
                 render_attachments(user, detail["id"], "citizen_my")
 
                 remaining = MAX_IMAGES_PER_COMPLAINT - int(detail.get("photo_count", 0))

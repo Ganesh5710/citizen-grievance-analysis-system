@@ -37,6 +37,12 @@ from core.locations import get_districts, get_mandals
 from core.ml_service import get_review_queue, resolve_review_item
 from core.performance import get_employee_own_performance, get_performance_metrics
 from core.permissions import can
+from core.reports import (
+    export_audit_logs_csv,
+    export_complaints_csv,
+    export_complaints_pdf,
+    export_complaints_xlsx,
+)
 from core.sla import acknowledge_escalation, run_escalation_check
 from ml.classifier import explain_with_lime, has_emergency_keyword
 
@@ -1398,6 +1404,78 @@ def render_performance_tab(user: dict) -> None:
             labels={"value": "Complaints", "username": "Employee", "variable": "State"},
         )
         st.plotly_chart(fig_emp, width="stretch", theme="streamlit")
+
+    if can(user, "export_reports"):
+        st.markdown("---")
+        st.markdown("#### Governance Reports & Filtered Exports (CSV, Excel, PDF & Audit Trail)")
+        st.caption("All exports respect your district/department jurisdiction and omit citizen personal identifiers.")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        exp_start = fc1.date_input("Start Date (UTC)", value=None, key=f"perf_exp_start_{user['id']}")
+        exp_end = fc2.date_input("End Date (UTC)", value=None, key=f"perf_exp_end_{user['id']}")
+
+        all_dists = get_districts()
+        if user.get("role") == "admin":
+            assigned_dids = set(int(x) for x in (user.get("assigned_districts") or []))
+            if not assigned_dids and user.get("district_id") is not None:
+                assigned_dids = {int(user["district_id"])}
+            scope_dists = [d for d in all_dists if int(d["id"]) in assigned_dids]
+        else:
+            scope_dists = all_dists
+        dist_map = {"All": None, **{d["name"]: d["id"] for d in scope_dists}}
+        sel_dist_lbl = fc3.selectbox("District", options=list(dist_map.keys()), key=f"perf_exp_dist_{user['id']}")
+
+        dept_opts = get_all_departments()
+        if user.get("role") == "admin" and user.get("department_id") is not None:
+            dept_opts = [d for d in dept_opts if int(d["id"]) == int(user["department_id"])]
+        dept_map = {"All": None, **{d["name"]: d["id"] for d in dept_opts}}
+        sel_dept_lbl = fc4.selectbox("Department", options=list(dept_map.keys()), key=f"perf_exp_dept_{user['id']}")
+
+        kw = dict(
+            start_date=exp_start.isoformat() if exp_start else None,
+            end_date=exp_end.isoformat() if exp_end else None,
+            district_id=dist_map[sel_dist_lbl],
+            department_id=dept_map[sel_dept_lbl],
+        )
+        try:
+            dc1, dc2, dc3, dc4 = st.columns(4)
+            with dc1:
+                st.download_button(
+                    "Export Complaints CSV",
+                    data=export_complaints_csv(user, **kw),
+                    file_name="grievance_report.csv",
+                    mime="text/csv",
+                    key=f"dl_rep_csv_{user['id']}",
+                    width="stretch",
+                )
+            with dc2:
+                st.download_button(
+                    "Export Excel (.xlsx)",
+                    data=export_complaints_xlsx(user, **kw),
+                    file_name="grievance_report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_rep_xlsx_{user['id']}",
+                    width="stretch",
+                )
+            with dc3:
+                st.download_button(
+                    "Export Summary PDF",
+                    data=export_complaints_pdf(user, **kw),
+                    file_name="grievance_report.pdf",
+                    mime="application/pdf",
+                    key=f"dl_rep_pdf_{user['id']}",
+                    width="stretch",
+                )
+            with dc4:
+                st.download_button(
+                    "Export Audit Log CSV",
+                    data=export_audit_logs_csv(user, **kw),
+                    file_name="grievance_audit_log.csv",
+                    mime="text/csv",
+                    key=f"dl_rep_audit_{user['id']}",
+                    width="stretch",
+                )
+        except (PermissionError, ValueError) as exc:
+            st.error(str(exc))
 
 
 def _render_ml_explainability_panel(detail: dict, key_prefix: str) -> None:

@@ -110,11 +110,12 @@ citizen_grievance_project/
 | `manage_ml` | No | No | No | Yes | Train candidate models (never auto-activated) and manually promote |
 | `view_review_queue` | No | No | Yes | Yes | Inspect ML low-confidence, mismatch, and low-duration-confidence items |
 | `resolve_review_item` | No | No | Yes | Yes | Accept ML/citizen department and record priority feedback |
+| `export_reports` | No | No | Yes | Yes | Export filtered CSV, Excel (`.xlsx`), PDF reports & audit CSV within jurisdiction |
 | `view_analytics` | No | Yes (own scope) | Yes | Yes | View complaint analytics, location filters, and hotspot maps |
 | `support_complaint` | Yes | No | No | No | Citizens can support open local issues |
 | `withdraw_complaint` | Yes | No | No | No | Citizens can withdraw pre-assignment or request withdrawal post-assignment |
-| `export_own_data` | Yes | Yes | Yes | Yes | Export personal data (JSON/CSV) & citizen account anonymization (DPDP 2023) |
-| `view_public_dashboard` | Public | Public | Public | Public | Anonymized district transparency metrics (suppresses `< 5` groups, zero PII) |
+| `export_own_data` | Yes | No | No | No | Citizens export personal data (JSON/CSV) & request account anonymization (DPDP 2023) |
+| `view_public_dashboard` | Public | Public | Public | Public | Anonymized district transparency metrics & public ticket status lookup (rate-limited, zero PII) |
 
 > All permissions and scopes are enforced in the service layer (`core/`), not only in the UI.
 

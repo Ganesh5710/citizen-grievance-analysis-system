@@ -419,6 +419,12 @@ CREATE TABLE IF NOT EXISTS password_reset_rate_limits (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     window_start  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS public_status_rate_limits (
+    client_key    TEXT PRIMARY KEY,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    window_start  TEXT NOT NULL
+);
 """
 
 _DEFAULT_DEPARTMENTS = [
