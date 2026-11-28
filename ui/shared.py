@@ -294,6 +294,14 @@ def render_complaint_card(detail: dict) -> None:
             parts.append(f"<b>Accepted (UTC):</b> {accepted_esc}")
         assign_meta = "<p>" + " &nbsp;|&nbsp; ".join(parts) + "</p>"
 
+    est_res = detail.get("estimated_resolution")
+    est_line = ""
+    if isinstance(est_res, dict) and est_res.get("label"):
+        est_line = (
+            f"<p><b>Estimated Resolution Time (Estimate Only):</b> "
+            f"{html.escape(str(est_res['label']))} &mdash; <i>{html.escape(str(est_res.get('method', '')))}</i></p>"
+        )
+
     text_html = text_esc.replace("\n", "<br/>")
     render_html(
         f"""
@@ -312,6 +320,7 @@ def render_complaint_card(detail: dict) -> None:
             {geo_line}
             {instr_line}
             <p><b>Due At (UTC):</b> {due_esc} &nbsp;|&nbsp; <b>Photos:</b> {int(detail.get("photo_count", 0))}</p>
+            {est_line}
             {dur_line}
             {reason_line}
             <p class="cgs-muted" style="font-size:13px;"><b>Filed:</b> {created_esc} &nbsp;|&nbsp; <b>Updated:</b> {updated_esc}</p>
@@ -1526,4 +1535,171 @@ def render_review_queue_tab(user: dict, key_prefix: str) -> None:
                     st.rerun()
                 except (PermissionError, ValueError) as exc:
                     st.error(str(exc))
+
+
+def render_forecast_and_predictions_tab(user: dict, key_prefix: str) -> None:
+    """
+    Phase 2: Volume Forecasting (4 weeks + confidence band + staffing hint + backtest),
+    Resolution-Time Prediction model summary, and Rolling-Window Anomaly Alerts.
+    Respects role scope: Employees see own department only; Admins own jurisdiction.
+    """
+    from analytics.anomaly import detect_anomalies, get_anomaly_alerts
+    from analytics.forecast import get_scoped_volume_forecast
+    from analytics.resolution_predictor import _get_bundle
+    from core.auth import get_user_jurisdictions
+    import plotly.graph_objects as go
+
+    st.markdown("### Forecast and Predictions")
+    role = user.get("role")
+    active_depts = get_active_departments()
+    dept_names = [d["name"] for d in active_depts]
+
+    if role == "employee":
+        sel_dept = user.get("department") or (dept_names[0] if dept_names else "Water")
+        sel_dist_id = user.get("district_id")
+        st.caption(f"Employee Scope: Showing 4-week volume forecast strictly for department **{sel_dept}**.")
+    else:
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            dept_choices = ["All Departments", *dept_names]
+            chosen_dept = st.selectbox(
+                "Department Forecast Scope",
+                options=dept_choices,
+                key=f"{key_prefix}_fc_dept",
+            )
+            sel_dept = None if chosen_dept == "All Departments" else chosen_dept
+
+        with col_f2:
+            if role == "admin":
+                jurs = get_user_jurisdictions(user["id"])
+                adm_dists = {j["district_id"]: j["district_name"] for j in jurs if j.get("district_id")}
+                if adm_dists:
+                    sel_dist_id = st.selectbox(
+                        "District Jurisdiction",
+                        options=list(adm_dists.keys()),
+                        format_func=lambda did: adm_dists[did],
+                        key=f"{key_prefix}_fc_dist",
+                    )
+                else:
+                    sel_dist_id = None
+                    st.text_input("District Jurisdiction", value="No district scope", disabled=True, key=f"{key_prefix}_fc_dist_na")
+            else:
+                all_dists = get_districts(active_only=True)
+                d_opts: list[int | None] = [None, *[d["id"] for d in all_dists]]
+                d_lbls = {None: "All Districts (Statewide + Synthetic Calibrated)", **{d["id"]: d["name"] for d in all_dists}}
+                sel_dist_id = st.selectbox(
+                    "District Filter",
+                    options=d_opts,
+                    format_func=lambda did: d_lbls.get(did, str(did)),
+                    key=f"{key_prefix}_fc_dist",
+                )
+
+    try:
+        fc = get_scoped_volume_forecast(user, department_name=sel_dept, district_id=sel_dist_id, horizon=4)
+    except (PermissionError, ValueError) as exc:
+        st.error(str(exc))
+        return
+
+    st.info(f"Active Forecast Method: **{fc['chosen_method']}** — {fc['method_note']}")
+
+    hist_rows = fc.get("history", [])[-24:]
+    pred_rows = fc.get("forecast", [])
+    if hist_rows or pred_rows:
+        fig = go.Figure()
+        if hist_rows:
+            fig.add_trace(go.Scatter(
+                x=[r["week_start"] for r in hist_rows],
+                y=[r["volume"] for r in hist_rows],
+                mode="lines+markers",
+                name="Observed Weekly Volume",
+            ))
+        if pred_rows:
+            px_dates = [r["week_start"] for r in pred_rows]
+            py_hi = [r["upper_ci"] for r in pred_rows]
+            py_lo = [r["lower_ci"] for r in pred_rows]
+            fig.add_trace(go.Scatter(
+                x=px_dates + px_dates[::-1],
+                y=py_hi + py_lo[::-1],
+                fill="toself",
+                fillcolor="rgba(59, 130, 246, 0.18)",
+                line=dict(color="rgba(255,255,255,0)"),
+                hoverinfo="skip",
+                showlegend=True,
+                name="80% Confidence Band",
+            ))
+            fig.add_trace(go.Scatter(
+                x=px_dates,
+                y=[r["predicted_volume"] for r in pred_rows],
+                mode="lines+markers",
+                name=f"Forecast ({fc['chosen_method']})",
+            ))
+        fig.update_layout(title="4-Week Complaint Volume Forecast", height=360, xaxis_title="Week Start", yaxis_title="Complaints")
+        st.plotly_chart(fig, width="stretch", theme="streamlit")
+
+    if pred_rows:
+        st.markdown("#### Next 4 Weeks & Staffing Hints")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Week Starting": r["week_start"],
+                    "Predicted Volume": r["predicted_volume"],
+                    "Low Estimate (80% CI)": r["lower_ci"],
+                    "High Estimate (80% CI)": r["upper_ci"],
+                    "Suggested Active Handlers (15/wk cap)": r["suggested_handlers"],
+                }
+                for r in pred_rows
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+
+    bt = fc.get("backtest_metrics", {})
+    bt_rows = [
+        {"Method": m_name, "Rolling MAE": vals["mae"], "Rolling MAPE (%)": vals["mape"]}
+        for m_name, vals in bt.items()
+    ]
+    st.markdown("#### Rolling-Origin Backtest Comparison")
+    st.dataframe(pd.DataFrame(bt_rows), width="stretch", hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### Resolution-Time Predictor Model")
+    bundle = _get_bundle()
+    if bundle and bundle.get("metadata"):
+        meta = bundle["metadata"]
+        bm = meta.get("baseline_metrics", {})
+        mm = meta.get("model_metrics", {})
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Model MAE (hrs)", mm.get("mae_hours", "N/A"))
+        c2.metric("Baseline MAE (hrs)", bm.get("mae_hours", "N/A"))
+        c3.metric("Model RMSE (hrs)", mm.get("rmse_hours", "N/A"))
+        c4.metric("Baseline RMSE (hrs)", bm.get("rmse_hours", "N/A"))
+        st.caption(meta.get("note", "All resolution predictions displayed on tickets are clearly labeled as estimates."))
+    else:
+        st.caption("Resolution-time model artifact not trained yet; using department-priority baseline estimates safely.")
+
+    if role in ("admin", "super_admin"):
+        st.markdown("---")
+        st.markdown("### Rolling-Window Anomaly & Spike Alerts")
+        live_spikes = detect_anomalies(notify=True)
+        stored_alerts = get_anomaly_alerts(user, unread_only=False, limit=20)
+        if live_spikes:
+            for sp in live_spikes:
+                if role == "super_admin" or sp.get("district_id") == sel_dist_id:
+                    st.warning(f"{sp['title']} — {sp['message']}")
+        elif not stored_alerts:
+            st.success("No abnormal volume spikes detected in the rolling window.")
+        if stored_alerts:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Alert": a["title"],
+                        "Details": a["message"],
+                        "Created (UTC)": a["created_at"],
+                        "Read": "Yes" if a["is_read"] else "Unread",
+                    }
+                    for a in stored_alerts
+                ]),
+                width="stretch",
+                hide_index=True,
+            )
 

@@ -88,3 +88,40 @@ Top held-out department confusion pairs (`grievance_ml_20261128_084902.json`):
 4. **Sanitation -> Roads (7) / General / Other -> Water (7):** Drain overflow and roadside dumping share mixed street context.
 
 Top priority confusion pairs centered around **Medium <-> Low (`87` + `80`)** when complaints lacked explicit numeric durations, which is mitigated in production by the Review Queue + deterministic duration rules.
+
+---
+
+## 7. Phase 2: Volume Forecasting, Resolution-Time Prediction & Anomaly Detection
+
+### 7.1 Weekly Volume Forecast (4-Week Horizon, Rolling-Origin Backtest)
+
+Evaluated on 53 contiguous weekly buckets comparing `SARIMA(1,0,1)(1,0,0,4)` against a 4-week `Seasonal-Naive Baseline` across 8 rolling origins. Whenever SARIMA does not beat the baseline MAE, the system explicitly reports this and falls back to the **Seasonal-Naive Baseline**.
+
+| Scope | Weeks | Active Selected Model | Seasonal-Naive MAE | Naive MAPE (%) | SARIMA MAE | SARIMA MAPE (%) | Next Wk Est | Suggested Handlers |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| **All Combined** | 53 | `SARIMA(1,0,1)(1,0,0,4)` | 11.095 | 6.68 | **8.475** | **5.12** | 162.0 | 11 |
+| **Water** | 53 | `Seasonal-Naive Baseline` *(won)* | **5.143** | **17.59** | 5.309 | 18.44 | 28.0 | 2 |
+| **Roads** | 53 | `SARIMA(1,0,1)(1,0,0,4)` | 6.833 | 21.75 | **4.438** | **15.09** | 32.3 | 3 |
+| **Electricity** | 53 | `SARIMA(1,0,1)(1,0,0,4)` | 4.821 | 17.18 | **4.191** | **14.95** | 25.1 | 2 |
+| **Sanitation** | 53 | `SARIMA(1,0,1)(1,0,0,4)` | 8.976 | 36.30 | **5.943** | **25.69** | 30.4 | 3 |
+| **Traffic** | 53 | `SARIMA(1,0,1)(1,0,0,4)` | 8.607 | 37.95 | **4.703** | **18.23** | 22.9 | 2 |
+| **General / Other** | 53 | `Seasonal-Naive Baseline` *(won)* | **7.095** | 29.85 | 7.128 | **28.99** | 33.0 | 3 |
+
+![4-Week Volume Forecast](evaluation_charts/forecast_backtest.png)
+
+### 7.2 Resolution-Time Prediction (`HistGradientBoostingRegressor`)
+
+Trained on `5,930` resolved records (`4,594` train / `1,336` template-grouped held-out test) using `department`, `priority`, `district`, `hour`, `weekday`, and `text_length`:
+
+| Model | Held-Out MAE (hours) | Held-Out RMSE (hours) | Notes |
+|---|---:|---:|---|
+| Mean Baseline (`40.62h`) | 32.810 | 49.023 | Constant historical mean |
+| **`HistGradientBoostingRegressor`** | **19.213** | **35.368** | **Beats baseline (-41.4% MAE, -27.9% RMSE)** |
+
+All citizen and staff resolution times are presented clearly as **estimates only** (`is_estimate=True`), with department-priority baseline fallback when no model artifact is loaded.
+
+![Resolution-Time Evaluation](evaluation_charts/resolution_time_eval.png)
+
+### 7.3 Rolling-Window Spike / Anomaly Detection
+
+`analytics/anomaly.py` monitors `(district, department)` complaint counts inside configurable 2-hour windows (`CGS_ANOMALY_WINDOW_HOURS=2`) against trailing 7-day baselines using `z >= 2.5` (`CGS_ANOMALY_ZSCORE`) plus optional `IsolationForest` outlier verification. Detected spikes generate deduplicated alerts for both matching District Admins and Super Admin; `scripts/inject_spike.py` allows repeatable `[DEMO SPIKE]` simulation and cleanup (`--remove`).

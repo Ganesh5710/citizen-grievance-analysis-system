@@ -60,6 +60,7 @@ from core.priority_rules import (
 from core.sla import VALID_PRIORITIES, get_sla_policies, run_priority_aging_check, update_sla_policy
 from ui.shared import (
     render_escalations_tab,
+    render_forecast_and_predictions_tab,
     render_html,
     render_performance_tab,
     render_review_queue_tab,
@@ -1096,7 +1097,9 @@ def _render_locations_tab(user: dict) -> None:
 
 
 def render_super_admin_page(user: dict) -> None:
+    from analytics.anomaly import detect_anomalies
     run_unassigned_escalation_check()
+    detect_anomalies(notify=True)
 
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     render_html(
@@ -1125,6 +1128,7 @@ def render_super_admin_page(user: dict) -> None:
     (
         tab_complaints,
         tab_oversight,
+        tab_forecast,
         tab_review,
         tab_escalations,
         tab_perf,
@@ -1137,6 +1141,7 @@ def render_super_admin_page(user: dict) -> None:
     ) = st.tabs([
         "Complaints",
         "Admin Oversight",
+        "Forecast and Predictions",
         "Review Queue",
         "Escalations",
         "Performance",
@@ -1153,6 +1158,9 @@ def render_super_admin_page(user: dict) -> None:
 
     with tab_oversight:
         _render_admin_oversight_tab(user)
+
+    with tab_forecast:
+        render_forecast_and_predictions_tab(user, key_prefix="sa")
 
     with tab_review:
         render_review_queue_tab(user, key_prefix="sa")

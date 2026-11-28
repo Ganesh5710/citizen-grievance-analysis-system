@@ -605,7 +605,16 @@ def get_complaint_detail(user: dict | None, complaint_id: int, now: datetime | N
         if row is None or row["user_id"] != user.get("id"):
             raise PermissionError("You do not have access to this complaint.")
         cnt = get_image_counts_map([row["id"]]).get(row["id"], 0)
-        return _row_to_complaint(row, photo_count=cnt, now=now)
+        detail = _row_to_complaint(row, photo_count=cnt, now=now)
+        from analytics.resolution_predictor import predict_resolution_hours
+        detail["estimated_resolution"] = predict_resolution_hours(
+            detail["department"],
+            detail["priority"],
+            district_name=detail.get("district_name") or "",
+            created_at=detail.get("created_at"),
+            text=detail.get("text") or "",
+        )
+        return detail
 
     require(user, "view_all")
     with closing(_db.get_connection()) as conn:
@@ -636,7 +645,16 @@ def get_complaint_detail(user: dict | None, complaint_id: int, now: datetime | N
             _assert_admin_jurisdiction(conn, user, row["district_id"], row["department_id"])
 
     cnt = get_image_counts_map([row["id"]]).get(row["id"], 0)
-    return _row_to_complaint(row, photo_count=cnt, now=now)
+    detail = _row_to_complaint(row, photo_count=cnt, now=now)
+    from analytics.resolution_predictor import predict_resolution_hours
+    detail["estimated_resolution"] = predict_resolution_hours(
+        detail["department"],
+        detail["priority"],
+        district_name=detail.get("district_name") or "",
+        created_at=detail.get("created_at"),
+        text=detail.get("text") or "",
+    )
+    return detail
 
 
 def get_complaint_history(user: dict | None, complaint_id: int) -> list[dict]:

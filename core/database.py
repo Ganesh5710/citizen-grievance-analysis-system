@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     resolved_at             TEXT,
     reopen_count            INTEGER NOT NULL DEFAULT 0,
     is_deleted              INTEGER NOT NULL DEFAULT 0,
+    is_demo_spike           INTEGER NOT NULL DEFAULT 0,
     ml_suggested_department TEXT,
     ml_confidence           REAL,
     ml_top_terms            TEXT DEFAULT '[]',
@@ -811,6 +812,7 @@ def init_db() -> None:
                 ("is_recurring", "INTEGER NOT NULL DEFAULT 0"),
                 ("priority_reason", "TEXT DEFAULT ''"),
                 ("incident_group_id", "INTEGER REFERENCES incident_groups(id)"),
+                ("is_demo_spike", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col_name not in c_cols:
                     conn.execute(f"ALTER TABLE complaints ADD COLUMN {col_name} {col_def}")

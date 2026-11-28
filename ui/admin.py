@@ -13,6 +13,7 @@ import streamlit as st
 from core.auth import get_user_jurisdictions
 from ui.shared import (
     render_escalations_tab,
+    render_forecast_and_predictions_tab,
     render_html,
     render_performance_tab,
     render_review_queue_tab,
@@ -21,6 +22,9 @@ from ui.shared import (
 
 
 def render_admin_page(user: dict) -> None:
+    from analytics.anomaly import detect_anomalies
+    detect_anomalies(notify=True)
+
     display_name = html.escape(str(user.get("full_name", user.get("username", ""))))
     jurs = get_user_jurisdictions(user["id"]) if user.get("id") else []
     dist_names = sorted({j["district_name"] for j in jurs if j.get("district_name")})
@@ -35,11 +39,12 @@ def render_admin_page(user: dict) -> None:
         """
     )
 
-    tab_complaints, tab_review, tab_escalations, tab_perf = st.tabs([
+    tab_complaints, tab_review, tab_escalations, tab_perf, tab_forecast = st.tabs([
         "Complaints",
         "Review Queue",
         "Escalations",
         "Performance",
+        "Forecast and Predictions",
     ])
 
     with tab_complaints:
@@ -53,3 +58,6 @@ def render_admin_page(user: dict) -> None:
 
     with tab_perf:
         render_performance_tab(user)
+
+    with tab_forecast:
+        render_forecast_and_predictions_tab(user, key_prefix="adm")

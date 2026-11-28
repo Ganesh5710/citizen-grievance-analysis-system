@@ -1,0 +1,26 @@
+{
+  "trained_at": "2026-11-28 09:04:06 UTC",
+  "dataset_rows": 5930,
+  "train_rows": 4594,
+  "test_rows": 1336,
+  "features": [
+    "department",
+    "priority",
+    "district",
+    "hour",
+    "weekday",
+    "text_length"
+  ],
+  "mean_baseline_hours": 40.62,
+  "baseline_metrics": {
+    "mae_hours": 32.81,
+    "rmse_hours": 49.023
+  },
+  "model_metrics": {
+    "mae_hours": 19.213,
+    "rmse_hours": 35.368
+  },
+  "beats_baseline": true,
+  "note": "HistGradientBoostingRegressor beat Mean Baseline (MAE 19.21h < 32.81h, RMSE 35.37h < 49.02h).",
+  "resid_mae_hours": 19.21
+}

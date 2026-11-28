@@ -8,7 +8,7 @@ import html
 
 import streamlit as st
 
-from ui.shared import render_html, render_staff_dashboard
+from ui.shared import render_forecast_and_predictions_tab, render_html, render_staff_dashboard
 
 
 def render_employee_page(user: dict) -> None:
@@ -32,4 +32,8 @@ def render_employee_page(user: dict) -> None:
         """
     )
 
-    render_staff_dashboard(user, key_prefix="emp")
+    tab_tasks, tab_forecast = st.tabs(["My Complaints & Queue", "Forecast and Predictions"])
+    with tab_tasks:
+        render_staff_dashboard(user, key_prefix="emp")
+    with tab_forecast:
+        render_forecast_and_predictions_tab(user, key_prefix="emp")

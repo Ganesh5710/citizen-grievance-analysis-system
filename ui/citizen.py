@@ -10,6 +10,7 @@ import html
 
 import streamlit as st
 
+from analytics.resolution_predictor import predict_resolution_hours
 from core.clusters import find_similar_open_complaints, support_complaint
 from core.complaints import (
     get_complaint_detail,
@@ -382,11 +383,19 @@ def _render_complaint_form(user: dict, dept: dict) -> None:
                     f" Note: AI suggested '{saved['ml_suggested_department']}' ({conf_pct}% confidence); "
                     "an administrator may review category routing if needed."
                 )
+            est_info = predict_resolution_hours(
+                dept["name"],
+                priority_text,
+                district_name=saved.get("district_name", "") if saved else "",
+                created_at=saved.get("created_at") if saved else None,
+                text=text_stripped,
+            )
             st.session_state["citizen_last_ticket"] = {
                 "incident_id": incident_id,
                 "department":  dept["name"],
                 "priority":    priority_text,
                 "ml_hint":     ml_hint,
+                "est_label":   est_info.get("label", ""),
             }
             st.session_state.pop("citizen_selected_dept_id", None)
             st.session_state["citizen_form_gen"] = form_gen + 1
@@ -564,10 +573,15 @@ def render_citizen_page(user: dict) -> None:
     with tab_submit:
         if "citizen_last_ticket" in st.session_state:
             ticket = st.session_state.pop("citizen_last_ticket")
+            est_part = (
+                f" | Estimated Resolution (estimate only): {ticket['est_label']}"
+                if ticket.get("est_label")
+                else ""
+            )
             st.success(
                 f"Complaint submitted. Ticket ID: {ticket['incident_id']} | "
                 f"Department: {ticket['department']} | "
-                f"Detected Priority: {ticket['priority']}."
+                f"Detected Priority: {ticket['priority']}{est_part}."
                 f"{ticket.get('ml_hint', '')}"
             )
 
