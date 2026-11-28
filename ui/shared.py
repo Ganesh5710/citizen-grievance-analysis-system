@@ -1703,3 +1703,91 @@ def render_forecast_and_predictions_tab(user: dict, key_prefix: str) -> None:
                 hide_index=True,
             )
 
+
+def render_notification_center(user: dict) -> None:
+    """In-app notification inbox & email/in-app preferences bar for every logged-in role."""
+    from core.auth import update_own_preferences, verify_user_email
+    from notifications.service import (
+        get_unread_count,
+        get_user_inbox,
+        mark_all_user_notifications_read,
+        mark_user_notification_read,
+    )
+
+    unread_cnt = get_unread_count(user)
+    lbl = f"Notification Inbox ({unread_cnt} Unread)" if unread_cnt else "Notification Inbox (0 Unread)"
+    with st.expander(lbl, expanded=False):
+        t_inbox, t_prefs = st.tabs(["Inbox", "Notification Settings"])
+        with t_inbox:
+            inbox = get_user_inbox(user, unread_only=False, limit=30)
+            if unread_cnt > 0:
+                if st.button("Mark All Read", key=f"notif_mark_all_{user['id']}"):
+                    mark_all_user_notifications_read(user)
+                    st.rerun()
+            if not inbox:
+                st.caption("No in-app notifications yet.")
+            else:
+                for n in inbox:
+                    c1, c2 = st.columns([5, 1], vertical_alignment="center")
+                    prefix = "[UNREAD] " if not n["is_read"] else ""
+                    with c1:
+                        st.markdown(
+                            f"**{prefix}{n['title']}**  \n{n['body']}  \n"
+                            f"<small>{n['created_at']} UTC | {n['type']}</small>",
+                            unsafe_allow_html=True,
+                        )
+                    with c2:
+                        if not n["is_read"]:
+                            if st.button("Mark Read", key=f"notif_read_{user['id']}_{n['id']}"):
+                                mark_user_notification_read(user, n["id"])
+                                st.rerun()
+
+        with t_prefs:
+            if "notif_pref_flash" in st.session_state:
+                st.success(st.session_state.pop("notif_pref_flash"))
+            with st.form(key=f"notif_prefs_form_{user['id']}"):
+                p_email = st.text_input("Email Address", value=user.get("email") or "", key=f"np_email_{user['id']}")
+                p_phone = st.text_input("Phone (optional)", value=user.get("phone") or "", key=f"np_phone_{user['id']}")
+                pc1, pc2 = st.columns(2)
+                with pc1:
+                    p_in_app = st.checkbox(
+                        "Enable In-App Notifications",
+                        value=bool(user.get("in_app_notifications", True)),
+                        key=f"np_inapp_{user['id']}",
+                    )
+                with pc2:
+                    p_em_on = st.checkbox(
+                        "Enable Email Notifications (verified address only)",
+                        value=bool(user.get("email_notifications", True)),
+                        key=f"np_emon_{user['id']}",
+                    )
+                save_prefs = st.form_submit_button("Save Notification Preferences", type="primary")
+            if save_prefs:
+                try:
+                    upd = update_own_preferences(
+                        user,
+                        phone=p_phone.strip(),
+                        email=p_email.strip(),
+                        email_notifications=p_em_on,
+                        in_app_notifications=p_in_app,
+                    )
+                    st.session_state.user = upd
+                    st.session_state["notif_pref_flash"] = "Preferences updated."
+                    st.rerun()
+                except (PermissionError, ValueError) as exc:
+                    st.error(str(exc))
+
+            if user.get("email"):
+                if user.get("email_verified"):
+                    st.success(f"Verified Email: {user['email']}")
+                else:
+                    st.warning(f"Email '{user['email']}' is unverified (emails will not be sent until verified).")
+                    if st.button("Verify Saved Email Address", key=f"np_verify_btn_{user['id']}"):
+                        try:
+                            upd = verify_user_email(user, verified=True)
+                            st.session_state.user = upd
+                            st.session_state["notif_pref_flash"] = "Email verified successfully."
+                            st.rerun()
+                        except (PermissionError, ValueError) as exc:
+                            st.error(str(exc))
+

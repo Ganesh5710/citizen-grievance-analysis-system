@@ -154,6 +154,7 @@ def run_escalation_check(now: datetime | None = None) -> dict[str, int]:
     escalated_1 = 0
     escalated_2 = 0
     auto_closed = 0
+    escalated_events: list[tuple[int, int]] = []
 
     with closing(_db.get_connection()) as conn, conn:
         open_rows = conn.execute(
@@ -206,6 +207,7 @@ def run_escalation_check(now: datetime | None = None) -> dict[str, int]:
                     escalated_1 += 1
                 elif target_level == 2:
                     escalated_2 += 1
+                escalated_events.append((int(r["id"]), target_level))
 
         resolved_rows = conn.execute(
             """
@@ -241,6 +243,11 @@ def run_escalation_check(now: datetime | None = None) -> dict[str, int]:
                     ),
                 )
                 auto_closed += 1
+
+    if escalated_events:
+        from notifications.service import emit_complaint_event
+        for cid, lvl in escalated_events:
+            emit_complaint_event("complaint_escalated", cid, detail_note=f"Escalation Level {lvl}")
 
     return {
         "escalated_to_1": escalated_1,

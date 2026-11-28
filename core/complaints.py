@@ -516,6 +516,8 @@ def submit_complaint(
             conn, actor, complaint_id, initial_status, prepared_images, now=now_str
         )
 
+    from notifications.service import emit_complaint_event
+    emit_complaint_event("complaint_created", complaint_id, status_label=initial_status)
     return incident_id
 
 
@@ -852,6 +854,9 @@ def claim_complaint(actor: dict | None, complaint_id: int) -> dict:
                 ),
             )
 
+    from notifications.service import emit_complaint_event
+    emit_complaint_event("complaint_assigned", complaint_id, detail_note="Claimed by officer")
+
     return get_complaint_detail(actor, complaint_id)
 
 
@@ -987,6 +992,10 @@ def assign_task(
                 ),
             )
 
+    if employee_id is not None:
+        from notifications.service import emit_complaint_event
+        emit_complaint_event("complaint_assigned", complaint_id, detail_note=clean_instructions)
+
     return get_complaint_detail(actor, complaint_id)
 
 
@@ -1049,6 +1058,8 @@ def accept_task(actor: dict | None, complaint_id: int) -> dict:
                 now_str,
             ),
         )
+    from notifications.service import emit_complaint_event
+    emit_complaint_event("task_accepted", complaint_id)
     return get_complaint_detail(actor, complaint_id)
 
 
@@ -1315,6 +1326,11 @@ def update_complaint(
                 conn, complaint_id, effective_reason, now_str
             )
 
+    if target_status != old_status:
+        from notifications.service import emit_complaint_event
+        ev = "complaint_resolved" if target_status == "Resolved" else "status_changed"
+        emit_complaint_event(ev, complaint_id, status_label=target_status)
+
 
 def update_task_status(
     actor: dict | None,
@@ -1497,6 +1513,10 @@ def submit_feedback(
                     now_str,
                 ),
             )
+
+    if not accepted:
+        from notifications.service import emit_complaint_event
+        emit_complaint_event("complaint_reopened", complaint_id, status_label="Reopened")
 
     return get_complaint_detail(actor, complaint_id, now=now_dt)
 

@@ -138,7 +138,9 @@ CREATE TABLE IF NOT EXISTS users (
     preferred_language    TEXT NOT NULL DEFAULT 'en',
     phone                 TEXT DEFAULT '',
     email                 TEXT DEFAULT '',
+    email_verified        INTEGER NOT NULL DEFAULT 0,
     email_notifications   INTEGER NOT NULL DEFAULT 1,
+    in_app_notifications  INTEGER NOT NULL DEFAULT 1,
     created_at            TEXT DEFAULT (datetime('now'))
 );
 
@@ -347,9 +349,15 @@ CREATE TABLE IF NOT EXISTS notifications (
     target_role  TEXT DEFAULT '',
     complaint_id INTEGER REFERENCES complaints(id),
     incident_id  TEXT DEFAULT '',
+    type         TEXT NOT NULL DEFAULT 'general',
     title        TEXT NOT NULL,
-    message      TEXT NOT NULL,
+    body         TEXT NOT NULL DEFAULT '',
+    message      TEXT NOT NULL DEFAULT '',
     is_read      INTEGER NOT NULL DEFAULT 0,
+    channel      TEXT NOT NULL DEFAULT 'in_app',
+    status       TEXT NOT NULL DEFAULT 'sent',
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT DEFAULT '',
     created_at   TEXT DEFAULT (datetime('now'))
 );
 
@@ -492,7 +500,9 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         ("preferred_language",    "TEXT NOT NULL DEFAULT 'en'"),
         ("phone",                 "TEXT DEFAULT ''"),
         ("email",                 "TEXT DEFAULT ''"),
+        ("email_verified",        "INTEGER NOT NULL DEFAULT 0"),
         ("email_notifications",   "INTEGER NOT NULL DEFAULT 1"),
+        ("in_app_notifications",  "INTEGER NOT NULL DEFAULT 1"),
     ]
     for col_name, col_def in add_cols:
         if col_name not in cols:
@@ -821,6 +831,18 @@ def init_db() -> None:
                 conn.execute(
                     "ALTER TABLE complaint_images ADD COLUMN photo_stage TEXT NOT NULL DEFAULT 'initial'"
                 )
+            n_cols = _table_columns(conn, "notifications")
+            if n_cols:
+                for col_name, col_def in (
+                    ("type", "TEXT NOT NULL DEFAULT 'general'"),
+                    ("body", "TEXT NOT NULL DEFAULT ''"),
+                    ("channel", "TEXT NOT NULL DEFAULT 'in_app'"),
+                    ("status", "TEXT NOT NULL DEFAULT 'sent'"),
+                    ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                    ("last_error", "TEXT DEFAULT ''"),
+                ):
+                    if col_name not in n_cols:
+                        conn.execute(f"ALTER TABLE notifications ADD COLUMN {col_name} {col_def}")
             _seed_departments_in_conn(conn)
             _seed_wards_in_conn(conn)
             _seed_sla_policies_in_conn(conn)

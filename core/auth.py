@@ -47,7 +47,9 @@ SELECT u.id,
        u.preferred_language,
        u.phone,
        u.email,
+       u.email_verified,
        u.email_notifications,
+       u.in_app_notifications,
        u.created_at
 FROM users u
 LEFT JOIN departments d ON d.id = u.department_id
@@ -145,7 +147,9 @@ def _row_to_user(row: sqlite3.Row) -> dict:
         "preferred_language":   row["preferred_language"] if "preferred_language" in keys else "en",
         "phone":                row["phone"] if "phone" in keys else "",
         "email":                row["email"] if "email" in keys else "",
+        "email_verified":       bool(row["email_verified"]) if "email_verified" in keys else False,
         "email_notifications":  bool(row["email_notifications"]) if "email_notifications" in keys else True,
+        "in_app_notifications": bool(row["in_app_notifications"]) if "in_app_notifications" in keys else True,
     }
 
 
@@ -363,6 +367,7 @@ def update_own_preferences(
     phone: str | None = None,
     email: str | None = None,
     email_notifications: bool | None = None,
+    in_app_notifications: bool | None = None,
 ) -> dict:
     """Allow an authenticated user to update language, phone, email, and notification preferences."""
     if not isinstance(user, dict) or "id" not in user:
@@ -378,21 +383,52 @@ def update_own_preferences(
             row["phone"] if phone is None else phone,
             row["email"] if email is None else email,
         )
+        email_changed = (email is not None) and (clean_email.lower() != (row["email"] or "").lower())
+        verified_val = 0 if email_changed else int(row["email_verified"] or 0)
         email_notif = (
             (1 if email_notifications else 0)
             if email_notifications is not None
             else row["email_notifications"]
         )
+        in_app_notif = (
+            (1 if in_app_notifications else 0)
+            if in_app_notifications is not None
+            else row["in_app_notifications"]
+        )
         conn.execute(
             """
             UPDATE users
-            SET preferred_language = ?, phone = ?, email = ?, email_notifications = ?
+            SET preferred_language = ?, phone = ?, email = ?, email_verified = ?,
+                email_notifications = ?, in_app_notifications = ?
             WHERE id = ?
             """,
-            (lang, clean_phone, clean_email, email_notif, user["id"]),
+            (lang, clean_phone, clean_email, verified_val, email_notif, in_app_notif, user["id"]),
         )
         updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (user["id"],)).fetchone()
 
+    return _row_to_user(updated)
+
+
+def verify_user_email(
+    actor: dict | None,
+    *,
+    verified: bool = True,
+    target_user_id: int | None = None,
+) -> dict:
+    """Verify (or unverify) the user's validated email address."""
+    if not isinstance(actor, dict) or "id" not in actor:
+        raise PermissionError("Authentication required.")
+    uid = int(target_user_id) if target_user_id is not None else int(actor["id"])
+    if uid != int(actor["id"]):
+        require(actor, "manage_users")
+    with closing(get_connection()) as conn, conn:
+        row = conn.execute(_USER_SELECT + " WHERE u.id = ?", (uid,)).fetchone()
+        if row is None or not row["is_active"]:
+            raise ValueError("Target user not found or inactive.")
+        if verified and not (row["email"] and _EMAIL_RE.match(row["email"])):
+            raise ValueError("A valid email address must be saved before verification.")
+        conn.execute("UPDATE users SET email_verified = ? WHERE id = ?", (1 if verified else 0, uid))
+        updated = conn.execute(_USER_SELECT + " WHERE u.id = ?", (uid,)).fetchone()
     return _row_to_user(updated)
 
 

@@ -14,7 +14,7 @@ from core.analytics_geo import get_public_transparency_by_district
 from core.auth import change_own_password, is_session_expired, login, register
 import core.database as _db
 from core.locations import DEFAULT_LOCATION_CSV, get_location_stats, load_locations_from_csv
-from ui.shared import inject_shared_css, render_html
+from ui.shared import inject_shared_css, render_html, render_notification_center
 
 # ── Page config (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(
@@ -260,6 +260,8 @@ def main() -> None:
     if user.get("must_change_password"):
         render_forced_password_change(user)
         return
+
+    render_notification_center(user)
 
     role = user["role"]
 

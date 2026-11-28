@@ -162,10 +162,11 @@ def detect_anomalies(
                         conn.execute(
                             """
                             INSERT INTO notifications
-                                (user_id, target_role, complaint_id, incident_id, title, message, is_read, created_at)
-                            VALUES (NULL, 'super_admin', NULL, ?, ?, ?, 0, ?)
+                                (user_id, target_role, complaint_id, incident_id, type, title,
+                                 body, message, is_read, channel, status, created_at)
+                            VALUES (NULL, 'super_admin', NULL, ?, 'anomaly_alert', ?, ?, ?, 0, 'in_app', 'sent', ?)
                             """,
-                            (f"ANOM-{b['district_name'][:6].upper()}-{dep_id}", title, msg, now_str),
+                            (f"ANOM-{b['district_name'][:6].upper()}-{dep_id}", title, msg, msg, now_str),
                         )
 
                     # Notify active District Admin(s) responsible for this district (+ dept)
@@ -193,11 +194,30 @@ def detect_anomalies(
                                 conn.execute(
                                     """
                                     INSERT INTO notifications
-                                        (user_id, target_role, complaint_id, incident_id, title, message, is_read, created_at)
-                                    VALUES (?, 'admin', NULL, ?, ?, ?, 0, ?)
+                                        (user_id, target_role, complaint_id, incident_id, type, title,
+                                         body, message, is_read, channel, status, created_at)
+                                    VALUES (?, 'admin', NULL, ?, 'anomaly_alert', ?, ?, ?, 0, 'in_app', 'sent', ?)
                                     """,
-                                    (ar["user_id"], f"ANOM-{b['district_name'][:6].upper()}-{dep_id}", title, msg, now_str),
+                                    (ar["user_id"], f"ANOM-{b['district_name'][:6].upper()}-{dep_id}", title, msg, msg, now_str),
                                 )
+                                conn.execute(
+                                    """
+                                    INSERT INTO notifications
+                                        (user_id, target_role, complaint_id, incident_id, type, title,
+                                         body, message, is_read, channel, status, attempts, created_at)
+                                    SELECT u.id, 'admin', NULL, ?, 'anomaly_alert', ?, ?, ?, 1, 'email', 'pending', 0, ?
+                                    FROM users u
+                                    WHERE u.id = ? AND u.email_notifications = 1 AND u.email_verified = 1 AND u.email != ''
+                                    """,
+                                    (f"ANOM-{b['district_name'][:6].upper()}-{dep_id}", title, msg, msg, now_str, ar["user_id"]),
+                                )
+
+    if notify and alerts:
+        try:
+            from notifications.service import deliver_pending_emails
+            deliver_pending_emails(limit=15)
+        except Exception:
+            pass
 
     alerts.sort(key=lambda a: a["z_score"], reverse=True)
     return alerts
