@@ -1,30 +1,36 @@
 # Citizen Grievance Analysis System
 
+[![CI](https://github.com/Ganesh5710/citizen-grievance-analysis-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Ganesh5710/citizen-grievance-analysis-system/actions/workflows/ci.yml)
+
 ## Live Project Link
 
 https://smart-governance.streamlit.app/
 
 ## Project Overview
 
-An **AI-assisted, role-based civic grievance portal** built with Python, Streamlit, SQLite, Plotly Express, and Pillow. Citizens select the target department, attach optional EXIF-scrubbed photo evidence, and track status/history; employees manage complaints assigned to them within their department; administrators oversee assignments, escalations, and SLA performance; and super administrators manage users, departments, and SLA policies.
+An **AI-assisted, role-based civic grievance portal** built with Python, Streamlit, SQLite (`WAL`), optional PostgreSQL (`DATABASE_URL`), Plotly Express, scikit-learn, statsmodels, and Pillow. Citizens submit localized grievances (Andhra Pradesh pincode/hierarchy), view duplicate clusters within 300 m, track status publicly via QR code, and confirm/reopen resolutions; field employees accept assigned tasks and upload after-photos; jurisdiction-scoped District Admins assign officers, review ML/moderation flags, merge clusters, inspect demand forecasts/anomalies, and export CSV/Excel/PDF reports; Super Admins oversee Admin KPIs, manage locations, SLAs, YAML duration rules, ML promotion, backups, and spam blocks.
 
 ---
 
-## Quick Start
+## Quick Start & Configuration (`.env` / Docker)
 
 ```bash
 cd citizen_grievance_project
+cp .env.example .env   # Configure optional SMTP, CGS_BACKUP_KEY, DATABASE_URL, etc.
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-### Seeded Demo Accounts (change default passwords before going live!)
+### Docker Compose Deployment
 
-| Role | Username | Password | Department |
-|---|---|---|---|
-| Super Admin | `superadmin` | `Admin@123` | - |
-| Admin | `admin` | `Admin@123` | - |
-| Employee | `employee` | `Admin@123` | `Water` |
+```bash
+docker compose up --build                 # SQLite persistent volumes on port 8501
+docker compose --profile postgres up -d   # Optional PostgreSQL 16 service
+```
+
+### Seeded Staff Accounts & First-Run Security
+
+On an empty database, `core/database.py` creates initial `superadmin`, `admin`, and `employee` (`Water`) accounts using passwords from `.env` (`CGS_SEED_SUPERADMIN_PASSWORD`, `CGS_SEED_ADMIN_PASSWORD`, `CGS_SEED_EMPLOYEE_PASSWORD`, or `CGS_SEED_PASSWORD`). When unset, unique cryptographic one-time passwords are generated and printed once at startup, with mandatory password rotation (`must_change_password = 1`) before dashboard access.
 
 Public citizens self-register via the **Sign Up** tab (creates a `user` account only).
 
@@ -34,49 +40,64 @@ Public citizens self-register via the **Sign Up** tab (creates a `user` account 
 
 ```
 citizen_grievance_project/
-├── .streamlit/
-│   └── config.toml             <- Native Light / Dark / System theme config
-├── app.py                      <- Entry point, auth, forced password reset, role router
-├── complaints.db               <- SQLite database (auto-initialized & migrated)
-├── uploads/                    <- Local attachment storage (gitignored; served via Python bytes)
-├── requirements.txt
-├── README.md
+├── .github/workflows/ci.yml    <- GitHub Actions: Ruff lint, compileall & full unittest suite
+├── .streamlit/config.toml        <- Native Light / Dark / System theme config
+├── .env.example                  <- Environment variable template (SMTP, ML, rate limits, DB, backups)
+├── Dockerfile & docker-compose.yml <- Non-root container + optional PostgreSQL profile
+├── pyproject.toml                <- Ruff configuration
+├── app.py                        <- Entry point, ?health=1, ?ticket= QR route, auth, DPDP notice, router
 │
 ├── core/
-│   ├── permissions.py          <- PERMISSIONS table, can(), require()
-│   ├── security.py             <- PBKDF2-HMAC-SHA256 hashing, temp passwords, text sanitization
-│   ├── database.py             <- SQLite schema, migrations, demo, SLA & location tables
-│   ├── departments.py          <- Active/all department lookup and Super Admin CRUD
-│   ├── locations.py            <- India Post CSV loader, pincode lookup, AP hierarchy & validation
-│   ├── auth.py                 <- Register, login, jurisdiction assignment, admin lifecycle
-│   ├── images.py               <- Pillow validation, EXIF/GPS stripping, initial/after stage RBAC
-│   ├── sla.py                  <- SLA policies, due_at calculation, escalations, auto-close
-│   ├── complaints.py           <- Submission, jurisdiction routing, assign_task, accept_task, updates
-│   ├── oversight.py            <- Super Admin metrics, >4h unassigned escalations, filtered audit log
-│   ├── analytics_geo.py        <- District/mandal/pincode filters, hotspot points, public metrics (<5 suppressed)
-│   ├── performance.py          <- Per-department, per-employee, and employee self metrics
-│   ├── priority_rules.py       <- Configurable duration thresholds & YAML audit log
-│   └── classifier.py           <- Duration + emergency + ML + keyword priority inference
+│   ├── permissions.py            <- Single-source PERMISSIONS table, can(), require()
+│   ├── security.py               <- PBKDF2-HMAC-SHA256 hashing, temp passwords, text sanitization
+│   ├── database.py               <- SQLite WAL + PostgreSQL DATABASE_URL adapter, indexes, migrations
+│   ├── health.py                 <- DB/ML/uploads health check service
+│   ├── logging_setup.py          <- RotatingFileHandler structured logs (logs/app.log)
+│   ├── departments.py            <- Active/all department lookup and Super Admin CRUD
+│   ├── locations.py              <- India Post CSV loader, pincode lookup, AP hierarchy & self-claim flag
+│   ├── auth.py                   <- Register, login lockout, OTP reset, jurisdiction & admin lifecycle
+│   ├── clusters.py               <- 300m duplicate detection (MiniLM / TF-IDF), support & merge/unmerge
+│   ├── moderation.py             <- Gibberish, repeat & EN/HI/TE abuse screening, cooldown/limits, CAPTCHA
+│   ├── privacy.py                <- DPDP Act 2023 notice, personal JSON/CSV export & account anonymization
+│   ├── public_status.py          <- Rate-limited non-PII public ticket lookup & QR PNG builder
+│   ├── reports.py                <- Jurisdiction-scoped CSV, OpenXML XLSX, PDF, Audit CSV & weekly digest
+│   ├── images.py                 <- Pillow validation, EXIF/GPS stripping, initial/after stage RBAC
+│   ├── sla.py                    <- SLA policies, due_at computation, escalations, 7d auto-close, aging
+│   ├── complaints.py             <- Intake, assign_task, accept_task, withdraw, transfer, internal notes
+│   ├── oversight.py              <- Super Admin metrics, >4h unassigned alerts, filtered audit log
+│   ├── analytics_geo.py          <- District/mandal/pincode filters, hotspot map & <5 public suppression
+│   ├── performance.py            <- Department & employee SLA KPI metrics
+│   ├── priority_rules.py         <- Configurable YAML duration rules & audit log
+│   └── ml_service.py             <- Model retraining promotion & Admin review queue resolution
 │
-├── data/
-│   └── india_post_pincodes_ap.csv <- Official data.gov.in India Post directory for Andhra Pradesh
+├── ml/ & nlp/ & analytics/ & notifications/
+│   ├── nlp/duration.py           <- Deterministic EN/HI/TE duration & recurrence extractor
+│   ├── ml/classifier.py & trainer.py <- TF-IDF + Duration LinearSVC, LIME, stratified group CV & ablation
+│   ├── analytics/forecast.py     <- 4-week rolling-origin SARIMA vs Seasonal-Naive demand forecast
+│   ├── analytics/resolution_predictor.py <- HistGradientBoosting resolution-time estimator vs mean baseline
+│   ├── analytics/anomaly.py      <- Rolling 2h Z-score + IsolationForest spike alerts
+│   └── notifications/service.py  <- In-app inbox + verified-email 3-retry SMTP queue
 │
 ├── scripts/
-│   ├── load_locations.py       <- Idempotent official India Post CSV loader & reporter
-│   └── run_escalations.py      <- Standalone CLI runner for cron / Task Scheduler
+│   ├── load_locations.py         <- Idempotent official India Post CSV loader
+│   ├── train.py / evaluate_priority.py / evaluate_phase2.py <- Offline ML & forecasting benchmarks
+│   ├── inject_spike.py           <- Controlled demo spike generator & cleanup
+│   ├── run_escalations.py        <- Cron SLA escalation, aging & auto-close worker
+│   ├── weekly_admin_report.py    <- Cron zero-PII weekly jurisdiction digest emailer
+│   ├── backup.py & restore.py    <- Online SQLite backup (PBKDF2+HMAC encrypted) & verified restore
+│   └── benchmark_10k.py / load_test.py <- 10,500-row latency benchmark & Locust HTTP load script
 │
-├── ui/
-│   ├── shared.py               <- Theme-aware CSS, shared dashboard, hotspot map, assign/override UI
-│   ├── citizen.py              <- Department picker, AP pincode/cascading location, photo upload & feedback
-│   ├── employee.py             <- Assigned tasks dashboard, Accept Task, closing remark & "after" photos
-│   ├── admin.py                <- District-scoped queue, assign_task, mandatory-reason status overrides
-│   └── super_admin.py          <- Oversight, alerts, user/admin jurisdiction, locations, SLA, rules & ML
+├── docs/
+│   ├── diagrams.md               <- Mermaid ER, Architecture, DFD 0/1, Use Case & Sequence diagrams
+│   ├── evaluation_report.md      <- Department, Priority, Ablation & Phase 2 Forecasting metrics
+│   ├── security_report.md        <- 10-category security test evidence & DATABASE_URL notes
+│   ├── performance_report.md     <- 10,500-row SQLite timings, indexes & Locust readiness
+│   ├── test_cases.md             <- Complete catalog of automated unit & security tests
+│   ├── demo_script.md            <- 5-minute end-to-end panel walkthrough
+│   ├── sus_questionnaire.md      <- System Usability Scale (SUS) evaluation form
+│   └── limitations_and_future_work.md <- Honest appraisal & roadmap
 │
-└── tests/
-    ├── test_permissions.py           <- End-to-end permission, image, SLA, escalation & migration tests
-    ├── test_duration_priority.py     <- Duration extractor, YAML rules & priority precedence tests
-    ├── test_ml.py                    <- ML classifier, evaluation & artifact tests
-    └── test_hierarchy_jurisdiction.py <- AP pincode/location, jurisdiction, assign, override & oversight tests
+└── tests/                        <- 64 automated unit, ML, workflow, privacy, backup & security tests
 ```
 
 ---
@@ -85,7 +106,7 @@ citizen_grievance_project/
 
 | Permission | user | employee | admin | super_admin | Scope / Rules |
 |---|---|---|---|---|---|
-| `submit_complaint` | Yes | No | No | No | Citizen picks active department; auto-assigns least-loaded employee |
+| `submit_complaint` | Yes | No | No | No | Citizen picks active department + valid district/location; enters `Awaiting Assignment` with suggested officer |
 | `view_own` | Yes | - | - | - | Citizens see only their own complaints |
 | `add_images` | Yes | No | No | No | Own open complaint only (not Resolved/Closed); max 3 photos |
 | `submit_feedback` | Yes | No | No | No | Own Resolved complaint only, within 7 days, once per cycle |
@@ -192,7 +213,7 @@ flowchart LR
 - **Employee (Assigned Task Execution Only):** Scoped by department and optional `district_id` / `mandal_id`. District employees see only tasks assigned to them; they can click **Accept Task** (`accept_task`), add remarks and `"after"` resolution photos (`add_after_images`), and resolve with a closing note (`>= 10` chars). They cannot assign, reassign, or edit department/priority (`PermissionError`).
 - **Public Transparency Privacy Rule:** The pre-login **Public Transparency** dashboard aggregates metrics by district only and suppresses any district group with fewer than **5** complaints, with zero personal details exposed.
 - **Duplicate Detection & Primary Cluster Resolution Rule:** Before filing a new complaint, `core/clusters.py` checks open same-department issues within `CGS_DUPLICATE_RADIUS_M` (default `300` m) using multilingual sentence embeddings (`paraphrase-multilingual-MiniLM-L12-v2`) with automatic TF-IDF cosine fallback. Citizens can support an existing issue (`complaint_supports`, unique per `(complaint_id, user_id)`, blocked on own complaints) or continue submitting; Admins can merge/unmerge clusters within their jurisdiction (`merge_complaints`, audit-logged). When total cluster reports cross configurable thresholds (`3 -> Medium`, `10 -> High`), `system` raises open complaint priorities (never lowers). Resolving a cluster's `primary_complaint_id` automatically transitions remaining open cluster members to `Resolved` (`actor = "system"`) and notifies linked reporters and supporters.
-- **Backward Compatibility Assumption:** Legacy submissions omitting `district_id` and `pincode` preserve the earlier `Pending` + least-loaded department auto-assignment path so legacy integrations and tests remain uninterrupted.
+- **Mandatory Jurisdiction Routing (Phase 0 Hardened):** Citizen `submit_complaint()` always requires a valid district/location and enters `Awaiting Assignment`, displaying only a suggested officer to the District Admin (no silent `Pending` bypass or silent auto-assignment). Legacy `allow_self_claim` remains disabled by default per district unless explicitly enabled by Super Admin.
 
 ---
 
@@ -242,24 +263,46 @@ Start in:       C:\path\to\citizen_grievance_project
 
 ---
 
-## Running Tests
+## Scheduled Maintenance, Training & Encrypted Backups
 
 ```bash
+# 1. Load / refresh official Andhra Pradesh India Post pincode hierarchy
+python scripts/load_locations.py
+
+# 2. Train & evaluate offline ML department/priority models
+python scripts/train.py --db complaints.db
+
+# 3. Run SLA escalation, >4h unassigned alert, priority aging & 7-day auto-close
+python scripts/run_escalations.py
+
+# 4. Send weekly zero-PII jurisdiction summary emails to verified opted-in Admins
+python scripts/weekly_admin_report.py --days 7
+
+# 5. Online SQLite backup (PBKDF2+HMAC encrypted when CGS_BACKUP_KEY is set) & restore
+python scripts/backup.py --keep 7
+python scripts/restore.py --file backups/cgs_backup_YYYYMMDD_HHMMSS.db.enc --yes
+```
+
+---
+
+## Running Tests & Linting
+
+```bash
+ruff check core nlp ml analytics notifications ui scripts tests app.py
 python -m unittest discover -s tests -v
-# or with pytest if installed:
-python -m pytest tests/ -v
+python scripts/benchmark_10k.py
 ```
 
 ---
 
 ## Technology Stack
 
-- Python
-- Streamlit (native Light / Dark / System theme)
-- SQLite (`complaints.db` with `PRAGMA foreign_keys = ON`)
-- Pandas & Plotly Express (`theme="streamlit"`)
-- Pillow (image verification & EXIF/GPS stripping)
-- PBKDF2-HMAC-SHA256 (`hashlib` + `hmac`)
+- **Runtime & UI:** Python 3.12+, Streamlit (native Light / Dark / System theme), QR Code (`qrcode`)
+- **Database:** SQLite (`WAL` mode + `PRAGMA foreign_keys = ON`) with unified `DATABASE_URL` SQLAlchemy adapter for PostgreSQL
+- **AI / NLP / Forecasting:** scikit-learn (`LinearSVC_Calibrated`, `HistGradientBoostingRegressor`, `IsolationForest`), `statsmodels` (`SARIMA`), LIME, deterministic multilingual duration extractor (`nlp/duration.py`)
+- **Visualization & Exports:** Pandas, Plotly Express, Folium (`streamlit-folium`), OpenXML `.xlsx` writer, `matplotlib` PDF export
+- **Security:** PBKDF2-HMAC-SHA256 (`120k` rounds), Pillow binary image validation & EXIF/GPS stripping, DPDP Act 2023 export & erasure
+- **DevOps & QA:** Docker, Docker Compose, GitHub Actions CI, Ruff, Locust, `unittest`
 
 ---
 
